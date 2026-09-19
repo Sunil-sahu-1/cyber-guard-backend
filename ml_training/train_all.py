@@ -24,11 +24,11 @@ def run(module: str, *args: str) -> int:
 
 def main() -> None:
     steps = [
-        ("ml_training.train_tabular", "--network"),
-        ("ml_training.train_tabular", "--malware"),
         ("ml_training.train_tabular", "--phishing-url"),
         ("ml_training.train_email",),
-        ("ml_training.train_behavior",),
+        ("ml_training.train_media", "--image", "--max-samples", "10000"),
+        ("ml_training.train_media", "--video", "--max-samples", "10000"),
+        ("ml_training.train_voice_small", "--max-samples", "10000"),
     ]
 
     failures = []
