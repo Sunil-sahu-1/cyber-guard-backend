@@ -7,6 +7,7 @@ class ImpersonationScan(models.Model):
     SCAN_TYPE_CHOICES = [
         ("IMAGE", "Image"),
         ("VIDEO", "Video"),
+        ("VOICE", "Voice"),
     ]
 
     RESULT_CHOICES = [
@@ -206,3 +207,44 @@ class ImpersonationEvidence(models.Model):
             f"{self.evidence_type} - "
             f"{self.risk_contribution}"
         )
+
+class VoiceAnalysis(models.Model):
+
+    scan = models.OneToOneField(
+        ImpersonationScan,
+        on_delete=models.CASCADE,
+        related_name="voice_analysis",
+    )
+
+    duration_seconds = models.FloatField(default=0)
+    sample_rate = models.PositiveIntegerField(default=16000)
+    speech_ratio = models.FloatField(default=0)
+    silence_ratio = models.FloatField(default=0)
+    pitch_mean_hz = models.FloatField(default=0)
+    pitch_std_hz = models.FloatField(default=0)
+    pitch_range_hz = models.FloatField(default=0)
+    pitch_variation_cv = models.FloatField(default=0)
+    spectral_centroid_mean_hz = models.FloatField(default=0)
+    spectral_centroid_std_hz = models.FloatField(default=0)
+    spectral_bandwidth_std_hz = models.FloatField(default=0)
+    spectral_flatness_mean = models.FloatField(default=0)
+    spectral_flatness_std = models.FloatField(default=0)
+    mfcc_variability = models.FloatField(default=0)
+    mfcc_delta_variability = models.FloatField(default=0)
+    energy_std_db = models.FloatField(default=0)
+    energy_range_db = models.FloatField(default=0)
+    zero_crossing_std = models.FloatField(default=0)
+    spectral_flux_std = models.FloatField(default=0)
+    harmonic_ratio = models.FloatField(default=0)
+    clipping_ratio = models.FloatField(default=0)
+    voiced_frame_ratio = models.FloatField(default=0)
+
+    synthetic_voice_indicator = models.BooleanField(default=False)
+    replay_indicator = models.BooleanField(default=False)
+
+    signal_components = models.JSONField(default=dict, blank=True)
+    analysis_details = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Voice Analysis - {self.scan.id}"
