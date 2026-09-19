@@ -5,6 +5,7 @@ from .models import (
     DeepfakeAnalysis,
     IdentityAnalysis,
     ImpersonationEvidence,
+    VoiceAnalysis,
 )
 
 
@@ -79,6 +80,45 @@ class ImpersonationEvidenceSerializer(
         ]
 
 
+class VoiceAnalysisSerializer(
+    serializers.ModelSerializer
+):
+
+    class Meta:
+        model = VoiceAnalysis
+        fields = [
+            "id",
+            "duration_seconds",
+            "sample_rate",
+            "speech_ratio",
+            "silence_ratio",
+            "pitch_mean_hz",
+            "pitch_std_hz",
+            "pitch_range_hz",
+            "pitch_variation_cv",
+            "spectral_centroid_mean_hz",
+            "spectral_centroid_std_hz",
+            "spectral_bandwidth_std_hz",
+            "spectral_flatness_mean",
+            "spectral_flatness_std",
+            "mfcc_variability",
+            "mfcc_delta_variability",
+            "energy_std_db",
+            "energy_range_db",
+            "zero_crossing_std",
+            "spectral_flux_std",
+            "harmonic_ratio",
+            "clipping_ratio",
+            "voiced_frame_ratio",
+            "synthetic_voice_indicator",
+            "replay_indicator",
+            "signal_components",
+            "analysis_details",
+            "created_at",
+        ]
+        read_only_fields = ["id", "created_at"]
+
+
 class ImpersonationScanSerializer(
     serializers.ModelSerializer
 ):
@@ -88,6 +128,10 @@ class ImpersonationScanSerializer(
     )
 
     identity_analysis = IdentityAnalysisSerializer(
+        read_only=True
+    )
+
+    voice_analysis = VoiceAnalysisSerializer(
         read_only=True
     )
 
@@ -113,6 +157,7 @@ class ImpersonationScanSerializer(
             "updated_at",
             "deepfake_analysis",
             "identity_analysis",
+            "voice_analysis",
             "evidence",
         ]
 
@@ -127,5 +172,6 @@ class ImpersonationScanSerializer(
             "updated_at",
             "deepfake_analysis",
             "identity_analysis",
+            "voice_analysis",
             "evidence",
         ]
