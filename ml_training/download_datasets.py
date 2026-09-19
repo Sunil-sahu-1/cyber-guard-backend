@@ -1,19 +1,17 @@
 """Download and prepare public Cyber Guard training datasets.
 
-Large/licensed datasets are intentionally not committed to Git.
-Run this from the backend root:
+Run from the backend root:
 
     python -m ml_training.download_datasets
 
-For sources that require registration/terms acceptance, this script prints
-the official download page instead of bypassing access controls.
+Only sources with stable public download URLs are automated. Large datasets
+with multi-part files or terms/registration requirements are printed for
+manual download; the script never bypasses access controls.
 """
 
 from __future__ import annotations
 
 import hashlib
-import os
-import tarfile
 import urllib.request
 from pathlib import Path
 
@@ -26,25 +24,18 @@ SOURCES = {
         DATA / "malware" / "ember" / "ember_dataset_2018_2.tar.bz2",
         "b6052eb8d350a49a8d5a5396fbe7d16cf42848b86ff969b77464434cf2997812",
     ),
-    "asvspoof2021_df": (
-        "https://zenodo.org/records/4835108/files/ASVspoof2021_DF_eval.tar.gz?download=1",
-        DATA / "voice" / "asvspoof2021_df" / "ASVspoof2021_DF_eval.tar.gz",
-        None,
-    ),
-    "asvspoof2021_pa": (
-        "https://zenodo.org/records/4834716/files/ASVspoof2021_PA_eval.tar.gz?download=1",
-        DATA / "voice" / "asvspoof2021_pa" / "ASVspoof2021_PA_eval.tar.gz",
-        None,
-    ),
 }
 
 MANUAL = {
+    "ASVspoof 2021 DF": "https://zenodo.org/records/4835108",
+    "ASVspoof 2021 PA": "https://zenodo.org/records/4834716",
+    "ASVspoof 2019 / AASIST training": "https://github.com/clovaai/aasist",
     "FaceForensics++": "https://github.com/ondyari/FaceForensics",
     "DFDC": "https://ai.meta.com/datasets/dfdc/",
     "CIC-IDS2017": "https://www.unb.ca/cic/datasets/ids-2017.html",
     "PhishTank": "https://phishtank.org/developer_info.php",
     "Enron Email": "https://www.cs.cmu.edu/~enron/",
-    "SpamAssassin corpus": "https://spamassassin.apache.org/publiccorpus/",
+    "SpamAssassin public corpus": "https://spamassassin.apache.org/publiccorpus/",
 }
 
 
@@ -53,6 +44,7 @@ def download(url: str, target: Path) -> None:
     if target.exists():
         print(f"[skip] {target}")
         return
+
     print(f"[download] {url}")
     urllib.request.urlretrieve(url, target)
     print(f"[saved] {target}")
@@ -66,20 +58,9 @@ def sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def extract_archive(path: Path, destination: Path) -> None:
-    destination.mkdir(parents=True, exist_ok=True)
-    name = path.name.lower()
-    if name.endswith((".tar.gz", ".tgz", ".tar.bz2", ".tbz2")):
-        mode = "r:gz" if name.endswith((".tar.gz", ".tgz")) else "r:bz2"
-        print(f"[extract] {path.name}")
-        with tarfile.open(path, mode) as tf:
-            tf.extractall(destination)
-    else:
-        print(f"[manual extraction required] {path}")
-
-
 def main() -> None:
     for p in [
+        DATA / "voice" / "asvspoof2019_la",
         DATA / "voice" / "asvspoof2021_df",
         DATA / "voice" / "asvspoof2021_pa",
         DATA / "deepfake" / "faceforensics",
@@ -95,21 +76,21 @@ def main() -> None:
     for name, (url, target, expected) in SOURCES.items():
         try:
             download(url, target)
-            if expected:
-                actual = sha256(target)
-                if actual != expected:
-                    raise RuntimeError(
-                        f"{name}: SHA256 mismatch. expected={expected}, actual={actual}"
-                    )
+            actual = sha256(target)
+            if actual != expected:
+                raise RuntimeError(
+                    f"{name}: SHA256 mismatch. expected={expected}, actual={actual}"
+                )
             print(f"[ok] {name}")
         except Exception as exc:
             print(f"[error] {name}: {exc}")
 
-    print("\nManual/terms-based sources:")
+    print("\nManual/terms-based or multi-part sources:")
     for name, url in MANUAL.items():
         print(f"  - {name}: {url}")
 
-    print("\nDo not commit dataset files. The repository .gitignore excludes datasets/*.")
+    print("\nAfter downloading, place each dataset under the matching datasets/ folder.")
+    print("Dataset files are ignored by Git and will not be committed.")
 
 
 if __name__ == "__main__":
