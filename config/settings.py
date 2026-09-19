@@ -195,13 +195,45 @@ ASGI_APPLICATION = "config.asgi.application"
 
 
 # ============================================================
-# DATABASE
+# DATABASE - POSTGRESQL
 # ============================================================
+
+POSTGRES_DB = os.getenv(
+    "POSTGRES_DB",
+    "cyber_guard_db",
+).strip()
+
+POSTGRES_USER = os.getenv(
+    "POSTGRES_USER",
+    "postgres",
+).strip()
+
+POSTGRES_PASSWORD = os.getenv(
+    "POSTGRES_PASSWORD",
+    "",
+)
+
+POSTGRES_HOST = os.getenv(
+    "POSTGRES_HOST",
+    "127.0.0.1",
+).strip()
+
+POSTGRES_PORT = os.getenv(
+    "POSTGRES_PORT",
+    "5432",
+).strip()
 
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": POSTGRES_DB,
+        "USER": POSTGRES_USER,
+        "PASSWORD": POSTGRES_PASSWORD,
+        "HOST": POSTGRES_HOST,
+        "PORT": POSTGRES_PORT,
+        "CONN_MAX_AGE": int(
+            os.getenv("DB_CONN_MAX_AGE", "60")
+        ),
     }
 }
 
