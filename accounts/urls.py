@@ -7,6 +7,8 @@ from .views import (
     LoginView,
     MeView,
     LogoutView,
+    PasswordResetRequestView,
+    PasswordResetConfirmView,
 )
 
 
@@ -34,6 +36,18 @@ urlpatterns = [
         "me/",
         MeView.as_view(),
         name="me",
+    ),
+
+    path(
+        "password-reset/",
+        PasswordResetRequestView.as_view(),
+        name="password_reset_request",
+    ),
+
+    path(
+        "password-reset/confirm/<uidb64>/<token>/",
+        PasswordResetConfirmView.as_view(),
+        name="password_reset_confirm",
     ),
 
     path(
