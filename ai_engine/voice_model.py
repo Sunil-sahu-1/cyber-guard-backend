@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+import subprocess
 
 import numpy as np
 
@@ -32,6 +33,15 @@ AUDIO_EXTENSIONS = {
     ".ogg",
     ".aac",
     ".webm",
+    ".opus",
+    ".wma",
+    ".aiff",
+    ".aif",
+    ".caf",
+    ".amr",
+    ".mka",
+    ".ac3",
+    ".mp2",
 }
 
 
@@ -66,26 +76,61 @@ def _variation_score(value: float, low: float, high: float) -> float:
 
 
 def _load_audio(file_path: str):
-    import librosa
+    """Decode audio with the bundled FFmpeg executable for broad codec support."""
+    try:
+        import imageio_ffmpeg
+    except ImportError as error:
+        raise RuntimeError("Audio decoder is not installed. Install imageio-ffmpeg.") from error
 
-    audio, sample_rate = librosa.load(
+    ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+    command = [
+        ffmpeg_exe,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
         file_path,
-        sr=TARGET_SAMPLE_RATE,
-        mono=True,
-        duration=MAX_DURATION_SECONDS,
-    )
+        "-map",
+        "0:a:0",
+        "-t",
+        str(MAX_DURATION_SECONDS),
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        str(TARGET_SAMPLE_RATE),
+        "-f",
+        "f32le",
+        "-acodec",
+        "pcm_f32le",
+        "pipe:1",
+    ]
 
-    audio = np.asarray(audio, dtype=np.float32)
+    try:
+        completed = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+            timeout=MAX_DURATION_SECONDS + 20,
+        )
+    except FileNotFoundError as error:
+        raise RuntimeError("FFmpeg audio decoder is unavailable.") from error
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError("Audio decoding timed out.") from error
+    except subprocess.CalledProcessError as error:
+        decoder_error = error.stderr.decode("utf-8", errors="replace").strip()
+        raise ValueError(decoder_error or "The uploaded audio format or codec could not be decoded.") from error
 
+    audio = np.frombuffer(completed.stdout, dtype=np.float32).copy()
     if audio.size == 0:
-        raise ValueError("No audio samples were found.")
+        raise ValueError("No audio samples were found. Make sure the file contains an audio track.")
 
     peak = float(np.max(np.abs(audio)))
     if peak > 1.0:
         audio = audio / peak
 
-    return audio, int(sample_rate)
-
+    return audio, TARGET_SAMPLE_RATE
 
 def _feature_extraction(audio: np.ndarray, sample_rate: int) -> dict[str, Any]:
     import librosa
