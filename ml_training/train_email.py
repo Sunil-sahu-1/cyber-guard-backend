@@ -30,6 +30,7 @@ RESULTS = ROOT / "training_results"
 
 
 def main() -> None:
+    MAX_SAMPLES = 20_000
     files = sorted(DATA.glob("*.csv"))
     if not files:
         raise SystemExit(
@@ -44,10 +45,7 @@ def main() -> None:
     if not text_col or not label_col:
         raise SystemExit("Email CSV must contain text/body/content and label/class/target")
 
-    text = df[text_col].fillna("").astype(str)
-    labels = df[label_col].astype(str).str.lower().str.strip()
-    y = labels.map(lambda v: 1 if any(x in v for x in ["phish", "spam", "malicious", "1"]) else 0)
-
+    text = df[text_col].fillna("").astype(str)\n    labels = df[label_col].astype(str).str.lower().str.strip()\n    y = labels.map(lambda v: 1 if any(x in v for x in ["phish", "spam", "malicious", "1"]) else 0)\n\n    work = pd.DataFrame({"text": text, "label": y})\n    parts = []\n    per_class = MAX_SAMPLES // 2\n    for label in (0, 1):\n        cls = work[work["label"] == label]\n        parts.append(cls.sample(n=min(per_class, len(cls)), random_state=42))\n    work = pd.concat(parts, ignore_index=True).sample(frac=1, random_state=42)\n    text, y = work["text"], work["label"]\n    print(f"[email] selected {len(work):,} samples")\n
     x_train, x_test, y_train, y_test = train_test_split(
         text, y, test_size=0.2, random_state=42, stratify=y
     )
