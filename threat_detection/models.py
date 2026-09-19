@@ -24,6 +24,7 @@ class Threat(models.Model):
         ("MESSAGE", "Message"),
         ("IMAGE", "Image"),
         ("VIDEO", "Video"),
+        ("VOICE", "Voice"),
         ("LOGIN", "Login Activity"),
         ("DEVICE", "Device Activity"),
         ("NETWORK", "Network Activity"),
