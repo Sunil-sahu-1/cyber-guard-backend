@@ -22,7 +22,7 @@ import numpy as np
 
 
 MAX_FILE_SIZE = 20 * 1024 * 1024
-MAX_DURATION_SECONDS = 120.0
+MAX_DURATION_SECONDS = 30.0
 TARGET_SAMPLE_RATE = 16_000
 
 AUDIO_EXTENSIONS = {
@@ -138,7 +138,9 @@ def _feature_extraction(audio: np.ndarray, sample_rate: int) -> dict[str, Any]:
     import librosa
 
     n_fft = 1024
-    hop_length = 256
+    # A 512-sample hop keeps the analysis responsive while preserving
+    # enough temporal detail for anti-spoofing acoustic features.
+    hop_length = 512
 
     rms = librosa.feature.rms(
         y=audio,
@@ -187,7 +189,7 @@ def _feature_extraction(audio: np.ndarray, sample_rate: int) -> dict[str, Any]:
         fmin=70,
         fmax=400,
         sr=sample_rate,
-        frame_length=2048,
+        frame_length=1024,
         hop_length=hop_length,
     )
 
@@ -245,13 +247,10 @@ def _feature_extraction(audio: np.ndarray, sample_rate: int) -> dict[str, Any]:
         hop_length=hop_length,
     )
 
-    harmonic, percussive = librosa.effects.hpss(audio)
-    harmonic_energy = float(np.mean(harmonic ** 2))
-    percussive_energy = float(np.mean(percussive ** 2))
-    harmonic_ratio = harmonic_energy / max(
-        harmonic_energy + percussive_energy,
-        1e-9,
-    )
+    # HPSS is comparatively expensive on longer recordings. Estimate
+    # harmonicity from spectral flatness instead so the verification API
+    # stays responsive on normal laptop hardware.
+    harmonic_ratio = 1.0 - min(1.0, max(0.0, _safe_mean(flatness)))
 
     peak = float(np.max(np.abs(audio)))
     clipping_ratio = float(
