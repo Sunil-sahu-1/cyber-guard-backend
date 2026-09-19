@@ -9,6 +9,8 @@ class AuditLog(models.Model):
         ("FAILED_LOGIN", "Failed Login"),
         ("LOGOUT", "Logout"),
         ("REGISTER", "Register"),
+        ("PASSWORD_RESET_REQUESTED", "Password Reset Requested"),
+        ("PASSWORD_RESET_SUCCESS", "Password Reset Success"),
         ("CAPTCHA_FAILED", "Captcha Failed"),
 
         ("THREAT_ANALYZED", "Threat Analyzed"),
