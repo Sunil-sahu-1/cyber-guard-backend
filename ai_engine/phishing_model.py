@@ -1,4 +1,4 @@
-from __future__ import annotations
+
 
 import ipaddress
 import math
@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 from .url_redirect import resolve_redirect_chain
+from .google_safe_browsing import check_url_with_google
 
 
 # ---------------------------------------------------------------------------
@@ -29,6 +30,15 @@ SHORTENER_DOMAINS = {
     "shorturl.at",
     "tiny.cc",
     "lnkd.in",
+}
+
+# Domains that are commonly trusted. Unknown domains are treated as
+# unverified, not automatically malicious.
+TRUSTED_DOMAINS = {
+    "google.com", "google.co.in", "microsoft.com", "office.com",
+    "outlook.com", "apple.com", "amazon.com", "amazon.in",
+    "github.com", "linkedin.com", "facebook.com", "instagram.com",
+    "youtube.com", "zoom.us", "outskill.com", "imit.ac.in",
 }
 
 SUSPICIOUS_KEYWORDS = {
@@ -308,6 +318,123 @@ def _contains_dangerous_file(url_path: str) -> bool:
     return any(path.endswith(extension) for extension in DANGEROUS_FILE_EXTENSIONS)
 
 
+def _is_trusted_domain(hostname: str) -> bool:
+    """Return True when hostname belongs to a known trusted domain."""
+
+    hostname = (hostname or "").lower().strip(".")
+    if not hostname:
+        return False
+
+    return (
+        hostname in TRUSTED_DOMAINS
+        or any(hostname.endswith("." + domain) for domain in TRUSTED_DOMAINS)
+    )
+
+
+def _build_simple_explanation(
+    prediction: str,
+    is_shortener: bool,
+    redirect_count: int,
+    redirect_destination_changed: bool,
+    destination_score: float,
+    redirect_error: str,
+    suspicious_keywords: list[str],
+    brand_indicators: list[str],
+    is_ip: bool,
+    suspicious_tld: bool,
+    dangerous_file: bool,
+    google_matched: bool = False,
+    google_checked: bool = False,
+) -> str:
+    """Create a short, user-friendly URL explanation."""
+
+    if google_matched:
+        return (
+            "Google Safe Browsing reported this link as unsafe. "
+            "Do not open it or enter passwords, OTPs, or financial information."
+        )
+
+    if prediction in {"PHISHING", "LIKELY_PHISHING"}:
+        reasons = []
+
+        if is_ip:
+            reasons.append("uses an IP address instead of a normal domain")
+        if brand_indicators:
+            reasons.append("may be impersonating a known brand")
+        if suspicious_keywords:
+            reasons.append("contains account or security-related terms")
+        if is_shortener:
+            reasons.append("uses a shortened link")
+        if redirect_destination_changed:
+            reasons.append("redirects to another website")
+        if suspicious_tld:
+            reasons.append("uses a higher-risk domain extension")
+        if dangerous_file:
+            reasons.append("points to a potentially dangerous file")
+
+        if len(reasons) > 2:
+            reason_text = ", ".join(reasons[:-1]) + f", and {reasons[-1]}"
+        elif len(reasons) == 2:
+            reason_text = f"{reasons[0]} and {reasons[1]}"
+        elif reasons:
+            reason_text = reasons[0]
+        else:
+            reason_text = "shows several suspicious characteristics"
+
+        return (
+            f"This link looks suspicious because it {reason_text}. "
+            "Avoid opening it or entering personal information."
+        )
+
+    if prediction == "SUSPICIOUS":
+        if is_shortener and redirect_destination_changed:
+            return (
+                "This shortened link redirects to another website. "
+                "The destination should be verified before opening it."
+            )
+
+        if redirect_error:
+            return (
+                "This link could not be fully verified. "
+                "Check the destination before opening it."
+            )
+
+        if destination_score >= 40:
+            return (
+                "The link redirects to a destination with suspicious signs. "
+                "Avoid opening it until the destination is verified."
+            )
+
+        return (
+            "This link has some suspicious characteristics. "
+            "Verify the website before opening it."
+        )
+
+    if prediction == "LOW_RISK":
+        if redirect_error:
+            return (
+                "The link could not be fully verified. "
+                "It is not confirmed to be unsafe, but check the destination "
+                "before opening it."
+            )
+
+        if is_shortener:
+            return (
+                "This is a shortened link. No strong phishing signs were found, "
+                "but verify the final destination before opening it."
+            )
+
+        return (
+            "No strong phishing signs were detected. "
+            "Still verify the website before entering sensitive information."
+        )
+
+    return (
+        "No major phishing signs were detected in this link. "
+        "Always check the website address before entering sensitive information."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Main analysis
 # ---------------------------------------------------------------------------
@@ -449,6 +576,38 @@ def analyze_url(
         or 0
     )
 
+    # -----------------------------------------------------------------------
+    # Google Safe Browsing reputation check
+    # -----------------------------------------------------------------------
+
+    google_original = check_url_with_google(normalized_url)
+    google_final = {}
+
+    if final_url and final_url != normalized_url:
+        google_final = check_url_with_google(final_url)
+
+    google_matched = bool(
+        google_original.get("matched")
+        or google_final.get("matched")
+    )
+
+    google_checked = bool(
+        google_original.get("checked")
+        or google_final.get("checked")
+    )
+
+    google_errors = [
+        str(item.get("error"))
+        for item in (google_original, google_final)
+        if item.get("error")
+    ]
+
+    google_matches = []
+    for source in (google_original, google_final):
+        for match in source.get("matches", []) or []:
+            if match not in google_matches:
+                google_matches.append(match)
+
     destination_result: dict[str, Any] = {}
 
     if (
@@ -532,6 +691,15 @@ def analyze_url(
         score += points
         indicators.append(reason)
 
+    # Google Safe Browsing is an external reputation signal. A confirmed
+    # match is treated as a strong indicator. An API failure is NOT treated
+    # as proof that the URL is malicious.
+    if google_matched:
+        add_risk(
+            100,
+            "Google Safe Browsing reported this URL as unsafe.",
+        )
+
     # 1. IP address instead of domain
     if is_ip:
         add_risk(
@@ -591,10 +759,15 @@ def analyze_url(
             f"URL uses a redirect chain with {redirect_count} hop(s).",
         )
 
-    if redirect_info.get("error"):
+    redirect_error = str(redirect_info.get("error") or "").strip()
+
+    if redirect_error:
         indicators.append(
-            "Redirect inspection could not be completed safely: "
-            + str(redirect_info["error"])
+            "The link could not be fully verified because destination inspection failed."
+        )
+        add_risk(
+            8,
+            "Destination could not be fully verified.",
         )
 
     destination_score = _clamp_score(
@@ -731,15 +904,37 @@ def analyze_url(
     original_registered = _get_registered_domain(hostname)
     final_registered = _get_registered_domain(final_hostname)
 
-    if (
+    redirect_destination_changed = bool(
         redirect_count > 0
         and original_registered
         and final_registered
         and original_registered != final_registered
-    ):
-        add_risk(
-            8,
-            "Redirect destination uses a different registered domain from the original URL.",
+    )
+
+    final_domain_trusted = _is_trusted_domain(final_hostname)
+
+    if redirect_destination_changed:
+        if is_shortener and not final_domain_trusted:
+            add_risk(
+                18,
+                "Shortened link redirects to a different unverified website.",
+            )
+        else:
+            add_risk(
+                4,
+                "Link redirects to a different website.",
+            )
+
+    if final_domain_trusted:
+        indicators.append(
+            "Final destination belongs to a recognized trusted domain."
+        )
+
+    if google_checked and not google_matched:
+        indicators.append("Google Safe Browsing found no known threat match.")
+    elif not google_checked and google_errors:
+        indicators.append(
+            "Google Safe Browsing could not verify the URL; this does not mean the URL is unsafe."
         )
 
     score = _clamp_score(score)
@@ -750,10 +945,18 @@ def analyze_url(
     # Prediction and confidence
     # -----------------------------------------------------------------------
 
-    if score >= 80:
+    if google_matched:
+        prediction = "PHISHING"
+    elif score >= 80:
         prediction = "PHISHING"
     elif score >= 60:
         prediction = "LIKELY_PHISHING"
+    elif (
+        is_shortener
+        and redirect_destination_changed
+        and not final_domain_trusted
+    ):
+        prediction = "SUSPICIOUS"
     elif score >= 40:
         prediction = "SUSPICIOUS"
     elif score >= 20:
@@ -763,7 +966,9 @@ def analyze_url(
 
     # Confidence here represents confidence of the rule-based classification,
     # not probability that the URL is malicious.
-    if score >= 80:
+    if google_matched:
+        confidence = 0.98
+    elif score >= 80:
         confidence = 0.90
     elif score >= 60:
         confidence = 0.80
@@ -775,10 +980,40 @@ def analyze_url(
         confidence = 0.55
 
     # -----------------------------------------------------------------------
+    # Simple explanation
+    # -----------------------------------------------------------------------
+
+    explanation = _build_simple_explanation(
+        prediction=prediction,
+        is_shortener=is_shortener,
+        redirect_count=redirect_count,
+        redirect_destination_changed=redirect_destination_changed,
+        destination_score=destination_score,
+        redirect_error=redirect_error,
+        suspicious_keywords=suspicious_keywords,
+        brand_indicators=brand_indicators,
+        is_ip=is_ip,
+        suspicious_tld=suspicious_tld,
+        dangerous_file=dangerous_file,
+        google_matched=google_matched,
+        google_checked=google_checked,
+    )
+
+    # -----------------------------------------------------------------------
     # Recommendation
     # -----------------------------------------------------------------------
 
-    if severity == "CRITICAL":
+    if prediction in {"PHISHING", "LIKELY_PHISHING"}:
+        recommendation = (
+            "Do not open the link. Verify the sender and destination "
+            "through an independent source."
+        )
+    elif prediction == "SUSPICIOUS":
+        recommendation = (
+            "Verify the destination before opening the link "
+            "or entering personal information."
+        )
+    elif severity == "CRITICAL":
         recommendation = (
             "Block or quarantine the URL and investigate the destination "
             "using reputation, redirect and page-behaviour analysis."
@@ -847,14 +1082,35 @@ def analyze_url(
             "redirect_status_codes": redirect_info.get("status_codes", []),
             "redirect_error": redirect_info.get("error", ""),
             "final_url": final_url,
+            "landing_page_url": final_url,
+            "landing_page_hostname": final_hostname,
             "final_hostname": final_hostname,
             "final_registered_domain": final_registered,
-            "redirect_destination_changed": bool(
-                redirect_count > 0
-                and original_registered
-                and final_registered
-                and original_registered != final_registered
+            "final_domain_trusted": final_domain_trusted,
+            "redirect_destination_changed": redirect_destination_changed,
+            "destination_unverified": bool(
+                redirect_error
+                or (
+                    final_hostname
+                    and not final_domain_trusted
+                )
             ),
+            "google_safe_browsing": {
+                "provider": "Google Safe Browsing",
+                "checked": google_checked,
+                "matched": google_matched,
+                "safe": (
+                    False
+                    if google_matched
+                    else True
+                    if google_checked
+                    else None
+                ),
+                "original_url": google_original,
+                "final_url": google_final,
+                "matches": google_matches,
+                "errors": google_errors,
+            },
             "destination_risk_score": destination_score,
             "destination_severity": destination_result.get(
                 "severity",
@@ -869,6 +1125,7 @@ def analyze_url(
                 [],
             ) if destination_result else [],
         },
+        "explanation": explanation,
         "recommendation": recommendation,
     }
 

@@ -1,20 +1,10 @@
-"""
-NLP-based Phishing and Social Engineering Detection Engine.
 
-Analyzes:
-- Emails
-- SMS/messages
-- Social-media messages
-- Other text content
-
-This is an explainable rule-based NLP foundation.
-A trained ML/Transformer model can be integrated later.
-"""
 
 from __future__ import annotations
 
 import re
 from typing import Any
+from urllib.parse import urlparse
 
 
 # ============================================================================
@@ -23,6 +13,10 @@ from typing import Any
 
 MAX_TEXT_LENGTH = 50_000
 
+
+# ============================================================================
+# KEYWORD GROUPS
+# ============================================================================
 
 URGENT_KEYWORDS = {
     "urgent",
@@ -125,6 +119,82 @@ REQUEST_KEYWORDS = {
 }
 
 
+# ============================================================================
+# PROMOTIONAL / MARKETING KEYWORDS
+# ============================================================================
+
+PROMOTIONAL_KEYWORDS = {
+    "promotion",
+    "promotional",
+    "offer",
+    "special offer",
+    "discount",
+    "sale",
+    "deal",
+    "deals",
+    "limited offer",
+    "exclusive offer",
+    "free",
+    "coupon",
+    "voucher",
+    "newsletter",
+    "marketing",
+    "campaign",
+    "announcement",
+    "subscribe",
+    "unsubscribe",
+    "subscription",
+}
+
+
+EVENT_KEYWORDS = {
+    "event",
+    "webinar",
+    "workshop",
+    "seminar",
+    "conference",
+    "session",
+    "training",
+    "masterclass",
+    "mastermind",
+    "live session",
+    "online session",
+    "meeting",
+    "bootcamp",
+}
+
+
+REGISTRATION_KEYWORDS = {
+    "register",
+    "registration",
+    "register here",
+    "sign up",
+    "signup",
+    "join us",
+    "join now",
+    "book your seat",
+    "reserve your seat",
+    "enroll",
+    "enrollment",
+}
+
+
+PROMOTIONAL_CTA_KEYWORDS = {
+    "learn more",
+    "get started",
+    "claim",
+    "shop now",
+    "buy now",
+    "view offer",
+    "view details",
+    "read more",
+    "discover",
+    "attend",
+    "save your seat",
+    "reserve",
+}
+
+
 SUSPICIOUS_ATTACHMENT_EXTENSIONS = {
     ".exe",
     ".scr",
@@ -141,6 +211,10 @@ SUSPICIOUS_ATTACHMENT_EXTENSIONS = {
     ".rar",
 }
 
+
+# ============================================================================
+# URL / EMAIL PATTERNS
+# ============================================================================
 
 URL_PATTERN = re.compile(
     r"(?:https?://|www\.)[^\s<>\"]+",
@@ -164,6 +238,45 @@ MONEY_PATTERN = re.compile(
     r"|\b\d+(?:[.,]\d+)?\s?(?:rupees|rs|usd|dollars|euros|pounds)\b",
     re.IGNORECASE,
 )
+
+
+IP_URL_PATTERN = re.compile(
+    r"^(?:https?://)?"
+    r"(?:\d{1,3}\.){3}\d{1,3}"
+    r"(?::\d+)?(?:/|$)",
+    re.IGNORECASE,
+)
+
+
+# ============================================================================
+# BASIC TRUSTED DOMAINS
+# ============================================================================
+#
+# This is intentionally a small list.
+# A domain not present here is treated as UNVERIFIED, not automatically
+# malicious. Promotional + unverified external link can therefore be
+# classified as SUSPICIOUS, while stronger phishing signals still have
+# priority.
+#
+
+TRUSTED_DOMAINS = {
+    "google.com",
+    "google.co.in",
+    "microsoft.com",
+    "office.com",
+    "outlook.com",
+    "linkedin.com",
+    "github.com",
+    "apple.com",
+    "amazon.com",
+    "amazon.in",
+    "facebook.com",
+    "instagram.com",
+    "youtube.com",
+    "zoom.us",
+    "meet.google.com",
+    "outskill.com",
+}
 
 
 # ============================================================================
@@ -211,7 +324,16 @@ def _find_keywords(text: str, keywords: set[str]) -> list[str]:
 def _extract_urls(text: str) -> list[str]:
     """Extract HTTP/HTTPS/www URLs."""
 
-    return URL_PATTERN.findall(text)
+    urls = URL_PATTERN.findall(text)
+
+    cleaned = []
+
+    for url in urls:
+        cleaned_url = url.rstrip(".,;:!?)]}>\"'")
+        if cleaned_url:
+            cleaned.append(cleaned_url)
+
+    return cleaned
 
 
 def _extract_emails(text: str) -> list[str]:
@@ -224,15 +346,8 @@ def _detect_suspicious_attachments(text: str) -> list[str]:
     """
     Detect potentially dangerous attachment filenames.
 
-    Important:
-    Normal domains such as:
-        example.com
-        google.com
-        microsoft.com
-
-    must NOT be classified as .com attachments.
-
-    The extension must appear as part of a filename-like token.
+    Normal domains such as example.com or microsoft.com are not treated
+    as .com attachments.
     """
 
     found = []
@@ -265,12 +380,7 @@ def _detect_suspicious_attachments(text: str) -> list[str]:
 
 
 def _detect_excessive_caps(text: str) -> bool:
-    """
-    Detect unusually high uppercase usage.
-
-    This is only a supporting signal because legitimate alerts
-    can also contain uppercase text.
-    """
+    """Detect unusually high uppercase usage."""
 
     letters = [
         character
@@ -341,6 +451,398 @@ def _detect_html_or_script(text: str) -> bool:
 
 
 # ============================================================================
+# PROMOTIONAL ANALYSIS
+# ============================================================================
+
+def _detect_promotional_content(
+    promotional_keywords: list[str],
+    event_keywords: list[str],
+    registration_keywords: list[str],
+    promotional_cta_keywords: list[str],
+    text: str,
+) -> dict[str, Any]:
+    """
+    Detect marketing, event, webinar and promotional content.
+
+    This does not mean the message is malicious.
+    It is only a content category.
+    """
+
+    unsubscribe_detected = "unsubscribe" in text.lower()
+
+    marketing_score = 0
+
+    marketing_score += len(promotional_keywords) * 2
+    marketing_score += len(event_keywords) * 2
+    marketing_score += len(registration_keywords) * 2
+    marketing_score += len(promotional_cta_keywords) * 1
+
+    if unsubscribe_detected:
+        marketing_score += 3
+
+    detected = (
+        marketing_score >= 3
+        or len(event_keywords) >= 1
+        or len(registration_keywords) >= 1
+        or unsubscribe_detected
+    )
+
+    if event_keywords:
+        category = "EVENT"
+    elif registration_keywords:
+        category = "REGISTRATION"
+    elif promotional_keywords:
+        category = "MARKETING"
+    elif unsubscribe_detected:
+        category = "NEWSLETTER"
+    else:
+        category = "GENERAL"
+
+    return {
+        "detected": detected,
+        "category": category if detected else None,
+        "marketing_score": min(marketing_score, 100),
+        "promotional_keywords": promotional_keywords,
+        "event_keywords": event_keywords,
+        "registration_keywords": registration_keywords,
+        "promotional_cta_keywords": promotional_cta_keywords,
+        "unsubscribe_detected": unsubscribe_detected,
+    }
+
+
+# ============================================================================
+# URL ANALYSIS
+# ============================================================================
+
+def _analyze_url(url: str) -> dict[str, Any]:
+    """
+    Perform lightweight offline URL analysis.
+
+    This does NOT visit the URL.
+    """
+
+    original_url = url
+
+    if not re.match(r"^https?://", url, re.IGNORECASE):
+        parse_target = "http://" + url
+    else:
+        parse_target = url
+
+    try:
+        parsed = urlparse(parse_target)
+    except Exception:
+        return {
+            "url": original_url,
+            "domain": "",
+            "scheme": "",
+            "is_secure": False,
+            "is_ip_address": False,
+            "is_shortener": False,
+            "has_suspicious_terms": True,
+            "is_trusted": False,
+            "is_unverified": True,
+            "suspicious": True,
+            "reasons": ["URL could not be safely parsed."],
+        }
+
+    domain = (parsed.hostname or "").lower()
+    scheme = (parsed.scheme or "").lower()
+
+    reasons = []
+
+    is_ip_address = bool(
+        IP_URL_PATTERN.match(domain)
+    )
+
+    suspicious_domain_terms = {
+        "login",
+        "verify",
+        "verification",
+        "secure",
+        "account",
+        "update",
+        "password",
+        "credential",
+        "confirm",
+        "wallet",
+        "payment",
+        "bank",
+        "signin",
+    }
+
+    shortener_domains = {
+        "bit.ly",
+        "tinyurl.com",
+        "t.co",
+        "is.gd",
+        "ow.ly",
+        "cutt.ly",
+        "rb.gy",
+        "shorturl.at",
+    }
+
+    domain_parts = domain.split(".")
+
+    is_shortener = domain in shortener_domains
+
+    has_suspicious_terms = any(
+        term in domain.lower()
+        for term in suspicious_domain_terms
+    )
+
+    trusted = (
+        domain in TRUSTED_DOMAINS
+        or any(
+            domain.endswith("." + trusted_domain)
+            for trusted_domain in TRUSTED_DOMAINS
+        )
+    )
+
+    is_unverified = bool(domain) and not trusted
+
+    if is_ip_address:
+        reasons.append("Link uses an IP address instead of a normal domain.")
+
+    if is_shortener:
+        reasons.append("Link uses a URL-shortening service.")
+
+    if has_suspicious_terms:
+        reasons.append(
+            "Link contains security or account-related words."
+        )
+
+    if len(domain_parts) >= 4:
+        reasons.append("Link uses a deeply nested domain.")
+
+    if scheme != "https":
+        reasons.append("Link does not use HTTPS.")
+
+    suspicious = bool(
+        is_ip_address
+        or is_shortener
+        or has_suspicious_terms
+        or len(domain_parts) >= 4
+        or scheme != "https"
+    )
+
+    return {
+        "url": original_url,
+        "domain": domain,
+        "scheme": scheme,
+        "is_secure": scheme == "https",
+        "is_ip_address": is_ip_address,
+        "is_shortener": is_shortener,
+        "has_suspicious_terms": has_suspicious_terms,
+        "is_trusted": trusted,
+        "is_unverified": is_unverified,
+        "suspicious": suspicious,
+        "reasons": reasons,
+    }
+
+
+def _analyze_urls(urls: list[str]) -> dict[str, Any]:
+    """Analyze all URLs found in the message."""
+
+    details = [
+        _analyze_url(url)
+        for url in urls
+    ]
+
+    suspicious_urls = [
+        item
+        for item in details
+        if item["suspicious"]
+    ]
+
+    unverified_urls = [
+        item
+        for item in details
+        if item["is_unverified"]
+    ]
+
+    trusted_urls = [
+        item
+        for item in details
+        if item["is_trusted"]
+    ]
+
+    return {
+        "count": len(urls),
+        "details": details,
+        "suspicious_count": len(suspicious_urls),
+        "unverified_count": len(unverified_urls),
+        "trusted_count": len(trusted_urls),
+        "suspicious_urls": [
+            item["url"]
+            for item in suspicious_urls
+        ],
+        "unverified_urls": [
+            item["url"]
+            for item in unverified_urls
+        ],
+        "trusted_urls": [
+            item["url"]
+            for item in trusted_urls
+        ],
+    }
+
+
+# ============================================================================
+# SIMPLE EXPLANATION
+# ============================================================================
+
+def _build_simple_explanation(
+    prediction: str,
+    promotional: dict[str, Any],
+    url_analysis: dict[str, Any],
+    urgent_keywords: list[str],
+    credential_keywords: list[str],
+    financial_keywords: list[str],
+    threat_keywords: list[str],
+    request_keywords: list[str],
+    contains_otp_request: bool,
+    suspicious_attachments: list[str],
+) -> str:
+    """
+    Generate a short, user-friendly explanation.
+
+    This intentionally avoids exposing the internal scoring/rule details
+    to the end user.
+    """
+
+    # ------------------------------------------------------------------
+    # PHISHING
+    # ------------------------------------------------------------------
+
+    if prediction in {
+        "PHISHING",
+        "LIKELY_PHISHING",
+    }:
+        reasons = []
+
+        if urgent_keywords:
+            reasons.append("uses urgent language")
+
+        if credential_keywords:
+            reasons.append("asks for sensitive information")
+
+        if financial_keywords:
+            reasons.append("mentions financial or payment information")
+
+        if threat_keywords:
+            reasons.append("uses alarming or threatening language")
+
+        if request_keywords:
+            reasons.append("asks you to take an action")
+
+        if url_analysis["count"] > 0:
+            reasons.append("contains a web link")
+
+        if contains_otp_request:
+            reasons.append("mentions an OTP or security code")
+
+        if suspicious_attachments:
+            reasons.append("contains a potentially dangerous attachment")
+
+        if reasons:
+            if len(reasons) == 1:
+                reason_text = reasons[0]
+            elif len(reasons) == 2:
+                reason_text = f"{reasons[0]} and {reasons[1]}"
+            else:
+                reason_text = (
+                    ", ".join(reasons[:-1])
+                    + f", and {reasons[-1]}"
+                )
+
+            return (
+                "This email looks like a phishing attempt because it "
+                f"{reason_text}. "
+                "Do not click suspicious links or share your password, "
+                "OTP, or other personal information."
+            )
+
+        return (
+            "This email shows several signs of a possible phishing attack. "
+            "Avoid clicking links or sharing sensitive information."
+        )
+
+    # ------------------------------------------------------------------
+    # SUSPICIOUS PROMOTIONAL EMAIL
+    # ------------------------------------------------------------------
+
+    if prediction == "SUSPICIOUS" and promotional["detected"]:
+        if url_analysis["suspicious_count"] > 0:
+            return (
+                "This looks like a promotional or event email, "
+                "but one or more links look suspicious. "
+                "Verify the sender and link before opening it."
+            )
+
+        if url_analysis["unverified_count"] > 0:
+            return (
+                "This looks like a promotional or event email, "
+                "but it contains an unverified link. "
+                "Check the sender and destination before opening it."
+            )
+
+        return (
+            "This message contains promotional or event content "
+            "with some suspicious signs. Verify the sender before taking action."
+        )
+
+    # ------------------------------------------------------------------
+    # PROMOTIONAL
+    # ------------------------------------------------------------------
+
+    if prediction == "PROMOTIONAL":
+        category = promotional.get("category")
+
+        if category == "EVENT":
+            return (
+                "This appears to be an event or webinar email. "
+                "It does not show major phishing signs."
+            )
+
+        if category == "REGISTRATION":
+            return (
+                "This appears to be a registration or promotional email. "
+                "It does not show major phishing signs."
+            )
+
+        if category == "NEWSLETTER":
+            return (
+                "This appears to be a newsletter or marketing email. "
+                "It does not show major phishing signs."
+            )
+
+        return (
+            "This appears to be a promotional or marketing email. "
+            "No major phishing signs were detected."
+        )
+
+    # ------------------------------------------------------------------
+    # LOW RISK
+    # ------------------------------------------------------------------
+
+    if prediction == "LOW_RISK":
+        return (
+            "This message has a few low-risk indicators, "
+            "but no strong signs of phishing were detected. "
+            "Verify unexpected requests before taking action."
+        )
+
+    # ------------------------------------------------------------------
+    # SAFE
+    # ------------------------------------------------------------------
+
+    return (
+        "No major phishing signs were detected in this message. "
+        "Continue to be careful with unexpected links and requests."
+    )
+
+
+# ============================================================================
 # MAIN NLP ANALYSIS
 # ============================================================================
 
@@ -349,9 +851,10 @@ def analyze_text(
     text_type: str = "message",
 ) -> dict[str, Any]:
     """
-    Analyze email/message text for phishing and social-engineering indicators.
+    Analyze email/message text for phishing, social engineering,
+    and promotional content.
 
-    Returns a JSON-serializable dictionary containing:
+    Returns:
         risk_score
         severity
         prediction
@@ -359,6 +862,7 @@ def analyze_text(
         indicators
         features
         recommendation
+        explanation
 
     No external network request is performed.
     """
@@ -368,9 +872,9 @@ def analyze_text(
 
     text = str(text)
 
-    # ------------------------------------------------------------------------
-    # Empty input
-    # ------------------------------------------------------------------------
+    # =========================================================================
+    # EMPTY INPUT
+    # =========================================================================
 
     if not text.strip():
         return {
@@ -384,14 +888,17 @@ def analyze_text(
                 "No text was provided."
             ],
             "features": {},
+            "explanation": (
+                "No message content was provided for analysis."
+            ),
             "recommendation": (
                 "Provide email or message content for analysis."
             ),
         }
 
-    # ------------------------------------------------------------------------
-    # Maximum input size
-    # ------------------------------------------------------------------------
+    # =========================================================================
+    # MAXIMUM INPUT SIZE
+    # =========================================================================
 
     if len(text) > MAX_TEXT_LENGTH:
         return {
@@ -408,6 +915,9 @@ def analyze_text(
             "features": {
                 "text_length": len(text),
             },
+            "explanation": (
+                "The message is too large to analyze safely in one pass."
+            ),
             "recommendation": (
                 "Analyze the message in smaller sections and "
                 "investigate suspicious content separately."
@@ -448,6 +958,26 @@ def analyze_text(
         REQUEST_KEYWORDS,
     )
 
+    promotional_keywords = _find_keywords(
+        text,
+        PROMOTIONAL_KEYWORDS,
+    )
+
+    event_keywords = _find_keywords(
+        text,
+        EVENT_KEYWORDS,
+    )
+
+    registration_keywords = _find_keywords(
+        text,
+        REGISTRATION_KEYWORDS,
+    )
+
+    promotional_cta_keywords = _find_keywords(
+        text,
+        PROMOTIONAL_CTA_KEYWORDS,
+    )
+
     urls = _extract_urls(text)
 
     email_addresses = _extract_emails(text)
@@ -475,6 +1005,29 @@ def analyze_text(
     )
 
     # =========================================================================
+    # PROMOTIONAL ANALYSIS
+    # =========================================================================
+
+    promotional = _detect_promotional_content(
+        promotional_keywords=promotional_keywords,
+        event_keywords=event_keywords,
+        registration_keywords=registration_keywords,
+        promotional_cta_keywords=promotional_cta_keywords,
+        text=text,
+    )
+
+    # =========================================================================
+    # URL ANALYSIS
+    # =========================================================================
+
+    url_analysis = _analyze_urls(urls)
+
+    suspicious_link = (
+        url_analysis["suspicious_count"] > 0
+        or url_analysis["unverified_count"] > 0
+    )
+
+    # =========================================================================
     # RISK SCORING
     # =========================================================================
 
@@ -491,9 +1044,9 @@ def analyze_text(
         score += points
         indicators.append(reason)
 
-    # ------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     # 1. Urgency
-    # ------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
 
     if urgent_keywords:
         add_risk(
@@ -503,9 +1056,9 @@ def analyze_text(
             + ".",
         )
 
-    # ------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     # 2. Credential requests
-    # ------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
 
     if credential_keywords:
         add_risk(
@@ -515,9 +1068,9 @@ def analyze_text(
             + ".",
         )
 
-    # ------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     # 3. Financial manipulation
-    # ------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
 
     if financial_keywords:
         add_risk(
@@ -527,9 +1080,9 @@ def analyze_text(
             + ".",
         )
 
-    # ------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     # 4. Threat/fear tactics
-    # ------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
 
     if threat_keywords:
         add_risk(
@@ -539,9 +1092,9 @@ def analyze_text(
             + ".",
         )
 
-    # ------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     # 5. Action request
-    # ------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
 
     if request_keywords:
         add_risk(
@@ -551,9 +1104,9 @@ def analyze_text(
             + ".",
         )
 
-    # ------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     # 6. Links
-    # ------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
 
     if urls:
         add_risk(
@@ -562,9 +1115,9 @@ def analyze_text(
             "that require destination analysis.",
         )
 
-    # ------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     # 7. OTP
-    # ------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
 
     if contains_otp_request:
         add_risk(
@@ -573,9 +1126,9 @@ def analyze_text(
             "an OTP/security verification code.",
         )
 
-    # ------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     # 8. Money reference
-    # ------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
 
     if contains_money_reference:
         add_risk(
@@ -583,9 +1136,9 @@ def analyze_text(
             "Message contains a monetary amount.",
         )
 
-    # ------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     # 9. Suspicious attachments
-    # ------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
 
     if suspicious_attachments:
         add_risk(
@@ -598,9 +1151,9 @@ def analyze_text(
             + ".",
         )
 
-    # ------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     # 10. Excessive uppercase
-    # ------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
 
     if excessive_caps:
         add_risk(
@@ -608,9 +1161,9 @@ def analyze_text(
             "Unusually high uppercase usage detected.",
         )
 
-    # ------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     # 11. Excessive exclamation
-    # ------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
 
     if excessive_exclamation:
         add_risk(
@@ -619,9 +1172,9 @@ def analyze_text(
             "possible pressure or urgency.",
         )
 
-    # ------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     # 12. Obfuscation
-    # ------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
 
     if obfuscated_text:
         add_risk(
@@ -630,14 +1183,47 @@ def analyze_text(
             "words detected.",
         )
 
-    # ------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     # 13. HTML/script
-    # ------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
 
     if html_or_script:
         add_risk(
             15,
             "HTML or script-like content detected.",
+        )
+
+    # -------------------------------------------------------------------------
+    # 14. Suspicious URL characteristics
+    # -------------------------------------------------------------------------
+
+    if url_analysis["suspicious_count"] > 0:
+        add_risk(
+            min(
+                25,
+                url_analysis["suspicious_count"] * 10,
+            ),
+            "One or more links have suspicious characteristics.",
+        )
+
+    # -------------------------------------------------------------------------
+    # 15. Promotional content
+    #
+    # Promotional content itself does NOT add phishing risk.
+    # It is classified separately.
+    # -------------------------------------------------------------------------
+
+    if promotional["detected"]:
+        indicators.append(
+            "Promotional or marketing content detected: "
+            + ", ".join(
+                (
+                    promotional_keywords
+                    + event_keywords
+                    + registration_keywords
+                )[:10]
+            )
+            + "."
         )
 
     # =========================================================================
@@ -694,6 +1280,29 @@ def analyze_text(
         )
 
     # =========================================================================
+    # PROMOTIONAL + SUSPICIOUS LINK
+    # =========================================================================
+
+    promotional_suspicious_link = (
+        promotional["detected"]
+        and suspicious_link
+    )
+
+    if promotional_suspicious_link:
+        indicators.append(
+            "Promotional content contains an "
+            "unverified or suspicious link."
+        )
+
+        # Make this meaningful enough to become SUSPICIOUS,
+        # but do not make it critical by itself.
+        add_risk(
+            15,
+            "Promotional content is combined with "
+            "an unverified or suspicious link.",
+        )
+
+    # =========================================================================
     # FINAL SCORE
     # =========================================================================
 
@@ -705,20 +1314,32 @@ def analyze_text(
     # PREDICTION
     # =========================================================================
 
+    # Strong phishing signals always have priority.
     if score >= 80:
         prediction = "PHISHING"
 
     elif score >= 60:
         prediction = "LIKELY_PHISHING"
 
+    # Promotional + suspicious/unverified link gets SUSPICIOUS.
+    elif promotional_suspicious_link:
+        prediction = "SUSPICIOUS"
+
     elif score >= 40:
         prediction = "SUSPICIOUS"
+
+    elif promotional["detected"]:
+        prediction = "PROMOTIONAL"
 
     elif score >= 20:
         prediction = "LOW_RISK"
 
     else:
         prediction = "SAFE"
+
+    # =========================================================================
+    # CONFIDENCE
+    # =========================================================================
 
     # Rule-engine confidence.
     # This is NOT the probability that the message is malicious.
@@ -732,6 +1353,12 @@ def analyze_text(
     elif score >= 40:
         confidence = 0.70
 
+    elif promotional_suspicious_link:
+        confidence = 0.70
+
+    elif promotional["detected"]:
+        confidence = 0.75
+
     elif score >= 20:
         confidence = 0.60
 
@@ -739,25 +1366,46 @@ def analyze_text(
         confidence = 0.55
 
     # =========================================================================
+    # SIMPLE EXPLANATION
+    # =========================================================================
+
+    explanation = _build_simple_explanation(
+        prediction=prediction,
+        promotional=promotional,
+        url_analysis=url_analysis,
+        urgent_keywords=urgent_keywords,
+        credential_keywords=credential_keywords,
+        financial_keywords=financial_keywords,
+        threat_keywords=threat_keywords,
+        request_keywords=request_keywords,
+        contains_otp_request=contains_otp_request,
+        suspicious_attachments=suspicious_attachments,
+    )
+
+    # =========================================================================
     # RECOMMENDATION
     # =========================================================================
 
-    if severity == "CRITICAL":
-        recommendation = (
-            "Quarantine the message, avoid links/attachments, "
-            "and investigate the sender and destinations."
-        )
-
-    elif severity == "HIGH":
+    if prediction in {
+        "PHISHING",
+        "LIKELY_PHISHING",
+    }:
         recommendation = (
             "Do not click links or open attachments. "
-            "Quarantine or report the message for investigation."
+            "Do not share passwords, OTPs or financial information. "
+            "Report the message if necessary."
         )
 
-    elif severity == "MEDIUM":
+    elif prediction == "SUSPICIOUS":
         recommendation = (
-            "Treat the message with caution and independently "
-            "verify the sender and requested action."
+            "Verify the sender and link before taking action. "
+            "Avoid entering passwords or personal information."
+        )
+
+    elif prediction == "PROMOTIONAL":
+        recommendation = (
+            "This appears to be promotional content. "
+            "You can review it, but verify unexpected links before opening them."
         )
 
     elif severity == "LOW":
@@ -768,8 +1416,8 @@ def analyze_text(
 
     else:
         recommendation = (
-            "No major phishing or social-engineering indicators "
-            "were detected by the current NLP rules."
+            "No major phishing indicators were detected. "
+            "Continue to be careful with unexpected links and requests."
         )
 
     # =========================================================================
@@ -784,26 +1432,66 @@ def analyze_text(
         "prediction": prediction,
         "confidence": confidence,
         "indicators": indicators,
+
         "features": {
+            # Basic content information
             "text_length": len(text),
             "word_count": word_count,
+
+            # Existing security signals
             "urgent_keywords": urgent_keywords,
             "credential_keywords": credential_keywords,
             "financial_keywords": financial_keywords,
             "threat_keywords": threat_keywords,
             "trust_keywords": trust_keywords,
             "request_keywords": request_keywords,
+
+            # URLs
             "url_count": len(urls),
             "urls": urls,
+            "url_analysis": url_analysis,
+            "suspicious_link": suspicious_link,
+
+            # Email information
             "email_addresses": email_addresses,
+
+            # Attachments
             "suspicious_attachments": suspicious_attachments,
+
+            # Security indicators
             "otp_reference": contains_otp_request,
             "money_reference": contains_money_reference,
             "excessive_caps": excessive_caps,
             "excessive_exclamation": excessive_exclamation,
             "obfuscated_text": obfuscated_text,
             "html_or_script": html_or_script,
+
+            # Promotional tracking
+            "promotional_detected": promotional["detected"],
+            "promotional_category": promotional["category"],
+            "promotional_keywords": promotional[
+                "promotional_keywords"
+            ],
+            "event_keywords": promotional[
+                "event_keywords"
+            ],
+            "registration_keywords": promotional[
+                "registration_keywords"
+            ],
+            "promotional_cta_keywords": promotional[
+                "promotional_cta_keywords"
+            ],
+            "unsubscribe_detected": promotional[
+                "unsubscribe_detected"
+            ],
+            "promotional_suspicious_link": (
+                promotional_suspicious_link
+            ),
         },
+
+        # Simple user-friendly explanation
+        "explanation": explanation,
+
         "recommendation": recommendation,
     }
 
