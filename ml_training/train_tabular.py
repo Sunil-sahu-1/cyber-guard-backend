@@ -233,8 +233,7 @@ def train_phishing_url() -> None:
         lambda v: 1 if any(x in v for x in ["phish", "malicious", "bad", "1"]) else 0
     ).astype(int)
 
-    X = url_features(df[url_col])
-    X_train, X_test, y_train, y_test = train_test_split(
+    work = pd.DataFrame({"url": df[url_col].fillna("").astype(str), "label": y})\n    max_samples = 20_000\n    parts = []\n    per_class = max_samples // 2\n    for label in (0, 1):\n        cls = work[work["label"] == label]\n        parts.append(cls.sample(n=min(per_class, len(cls)), random_state=42))\n    work = pd.concat(parts, ignore_index=True).sample(frac=1, random_state=42)\n    print(f"[phishing-url] selected {len(work):,} samples")\n    X = url_features(work["url"])\n    y = work["label"]\n    X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.20, random_state=42, stratify=y
     )
 
