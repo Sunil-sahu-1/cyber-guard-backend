@@ -40,6 +40,7 @@ MODEL_WEIGHTS = {
     "IDENTITY_ENGINE": 1.30,
     "NETWORK_ENGINE": 1.30,
     "MALWARE_ENGINE": 1.40,
+    "VOICE_ENGINE": 1.40,
 }
 
 
@@ -402,6 +403,7 @@ def _humanize_model_name(
         "IDENTITY_ENGINE": "identity analysis",
         "NETWORK_ENGINE": "network analysis",
         "MALWARE_ENGINE": "malware analysis",
+        "VOICE_ENGINE": "voice anti-spoofing analysis",
     }
 
     return names.get(
