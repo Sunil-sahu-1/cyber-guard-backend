@@ -20,6 +20,7 @@ from ai_engine.image_model import (
     analyze_image_file,
     analyze_video_file,
 )
+from ai_engine.voice_model import analyze_voice_file
 from ai_engine.risk_engine import analyze_risk
 
 from incidents.models import (
@@ -39,6 +40,7 @@ from .models import (
     IdentityAnalysis,
     ImpersonationEvidence,
     ImpersonationScan,
+    VoiceAnalysis,
 )
 
 from .serializers import (
@@ -53,6 +55,16 @@ IMAGE_EXTENSIONS = {
     ".jpeg",
     ".png",
     ".webp",
+}
+
+AUDIO_EXTENSIONS = {
+    ".wav",
+    ".mp3",
+    ".m4a",
+    ".flac",
+    ".ogg",
+    ".aac",
+    ".webm",
 }
 
 VIDEO_EXTENSIONS = {
@@ -275,11 +287,11 @@ def _create_threat(
     risk: dict,
 ) -> Threat:
 
-    source_type = (
-        "IMAGE"
-        if scan_type == "IMAGE"
-        else "VIDEO"
-    )
+    source_type = {
+        "IMAGE": "IMAGE",
+        "VIDEO": "VIDEO",
+        "VOICE": "VOICE",
+    }.get(scan_type, "OTHER")
 
     score = _safe_float(
         risk.get(
@@ -563,6 +575,72 @@ def _save_impersonation_records(
             scan=scan,
             evidence_type=evidence_type,
             evidence_value=indicator,
+            risk_contribution=score,
+        )
+
+
+
+def _save_voice_analysis(
+    scan: ImpersonationScan,
+    ai_result: dict,
+) -> None:
+
+    features = ai_result.get("features", {})
+    if not isinstance(features, dict):
+        features = {}
+
+    score = _safe_float(ai_result.get("risk_score", 0))
+
+    VoiceAnalysis.objects.create(
+        scan=scan,
+        duration_seconds=_safe_float(features.get("duration_seconds", 0)),
+        sample_rate=int(features.get("sample_rate", 16000) or 16000),
+        speech_ratio=_safe_float(features.get("speech_ratio", 0)),
+        silence_ratio=_safe_float(features.get("silence_ratio", 0)),
+        pitch_mean_hz=_safe_float(features.get("pitch_mean_hz", 0)),
+        pitch_std_hz=_safe_float(features.get("pitch_std_hz", 0)),
+        pitch_range_hz=_safe_float(features.get("pitch_range_hz", 0)),
+        pitch_variation_cv=_safe_float(features.get("pitch_variation_cv", 0)),
+        spectral_centroid_mean_hz=_safe_float(features.get("spectral_centroid_mean_hz", 0)),
+        spectral_centroid_std_hz=_safe_float(features.get("spectral_centroid_std_hz", 0)),
+        spectral_bandwidth_std_hz=_safe_float(features.get("spectral_bandwidth_std_hz", 0)),
+        spectral_flatness_mean=_safe_float(features.get("spectral_flatness_mean", 0)),
+        spectral_flatness_std=_safe_float(features.get("spectral_flatness_std", 0)),
+        mfcc_variability=_safe_float(features.get("mfcc_variability", 0)),
+        mfcc_delta_variability=_safe_float(features.get("mfcc_delta_variability", 0)),
+        energy_std_db=_safe_float(features.get("energy_std_db", 0)),
+        energy_range_db=_safe_float(features.get("energy_range_db", 0)),
+        zero_crossing_std=_safe_float(features.get("zero_crossing_std", 0)),
+        spectral_flux_std=_safe_float(features.get("spectral_flux_std", 0)),
+        harmonic_ratio=_safe_float(features.get("harmonic_ratio", 0)),
+        clipping_ratio=_safe_float(features.get("clipping_ratio", 0)),
+        voiced_frame_ratio=_safe_float(features.get("voiced_frame_ratio", 0)),
+        synthetic_voice_indicator=score >= 60,
+        replay_indicator=False,
+        signal_components=ai_result.get("signal_components", {}),
+        analysis_details=ai_result,
+    )
+
+    indicators = ai_result.get("indicators", [])
+    if not isinstance(indicators, list):
+        indicators = []
+
+    evidence = [
+        str(item).strip()
+        for item in indicators
+        if item and str(item).strip()
+    ]
+
+    if not evidence:
+        evidence = [
+            "No strong synthetic-speech acoustic indicator detected by the current baseline."
+        ]
+
+    for item in dict.fromkeys(evidence):
+        ImpersonationEvidence.objects.create(
+            scan=scan,
+            evidence_type="VOICE_AI",
+            evidence_value=item,
             risk_contribution=score,
         )
 
@@ -1060,6 +1138,165 @@ class ImpersonationDeleteView(
                 f"{scan_id}"
             ),
             status="SUCCESS",
+        )
+
+
+
+class VoiceAnalyzeView(APIView):
+
+    permission_classes = [
+        IsAuthenticated
+    ]
+
+    def post(
+        self,
+        request,
+    ):
+
+        uploaded_file = request.FILES.get("voice")
+
+        if not uploaded_file:
+            return Response(
+                {"detail": "voice audio file is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        validation_error = validate_uploaded_file(
+            uploaded_file,
+            AUDIO_EXTENSIONS,
+        )
+
+        if validation_error:
+            return Response(
+                {"detail": validation_error},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        temp_path = None
+
+        try:
+            temp_path = save_uploaded_temp_file(uploaded_file)
+            ai_result = analyze_voice_file(
+                temp_path,
+                uploaded_file.name,
+                uploaded_file.size,
+            )
+        except Exception as error:
+            AuditLog.objects.create(
+                user=request.user,
+                action="IMPERSONATION_DETECTED",
+                ip_address=get_client_ip(request),
+                user_agent=request.META.get("HTTP_USER_AGENT", ""),
+                description=f"VOICE AI analysis failed: {error}",
+                status="FAILED",
+            )
+            return Response(
+                {
+                    "detail": "AI voice analysis failed.",
+                    "error": str(error),
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+
+        if not isinstance(ai_result, dict):
+            ai_result = {}
+
+        if not ai_result.get("is_valid", False):
+            return Response(
+                {
+                    "detail": ai_result.get(
+                        "error",
+                        "Voice analysis failed.",
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        model_score = _safe_float(ai_result.get("risk_score", 0))
+        risk = analyze_risk({"VOICE_ENGINE": model_score})
+
+        with transaction.atomic():
+            scan = ImpersonationScan.objects.create(
+                user=request.user,
+                scan_type="VOICE",
+                file_name=uploaded_file.name,
+                file_size=uploaded_file.size,
+                risk_score=_safe_float(
+                    risk.get("risk_score", model_score)
+                ),
+                result=str(
+                    risk.get("severity", "SAFE")
+                ).upper(),
+                explanation=_build_explanation(ai_result, risk),
+                status="COMPLETED",
+            )
+
+            threat = _create_threat(
+                user=request.user,
+                scan_type="VOICE",
+                file_name=uploaded_file.name,
+                file_size=uploaded_file.size,
+                ai_result=ai_result,
+                risk=risk,
+            )
+
+            _save_threat_analysis(
+                threat=threat,
+                model_name="VOICE_ENGINE",
+                ai_result=ai_result,
+            )
+
+            _save_voice_analysis(
+                scan=scan,
+                ai_result=ai_result,
+            )
+
+            incident = _create_incident_if_required(
+                threat,
+                risk,
+            )
+
+            AuditLog.objects.create(
+                user=request.user,
+                action=(
+                    "DEEPFAKE_DETECTED"
+                    if threat.severity in {"HIGH", "CRITICAL"}
+                    else "IMPERSONATION_DETECTED"
+                ),
+                ip_address=get_client_ip(request),
+                user_agent=request.META.get("HTTP_USER_AGENT", ""),
+                description=(
+                    f"VOICE anti-spoofing analysis completed. "
+                    f"Scan ID: {scan.id}; Threat ID: {threat.id}; "
+                    f"score={threat.risk_score}; severity={threat.severity}"
+                ),
+                status="SUCCESS",
+            )
+
+        response_data = {
+            "message": "AI voice analysis completed.",
+            "ai_analysis": ai_result,
+            "risk": risk,
+            "threat_id": threat.id,
+            "scan": ImpersonationScanSerializer(scan).data,
+        }
+
+        if incident:
+            response_data["incident"] = {
+                "id": incident.id,
+                "severity": incident.severity,
+                "status": incident.status,
+            }
+
+        return Response(
+            response_data,
+            status=status.HTTP_201_CREATED,
         )
 
 
