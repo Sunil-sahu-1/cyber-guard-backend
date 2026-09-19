@@ -74,6 +74,8 @@ AUDIO_EXTENSIONS = {
     ".mka",
     ".ac3",
     ".mp2",
+    ".mpeg",
+    ".mpga",
 }
 
 VIDEO_EXTENSIONS = {
