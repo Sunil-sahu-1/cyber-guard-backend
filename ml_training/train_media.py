@@ -35,7 +35,7 @@ def device() -> torch.device:
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def train_image(data_dir: Path, epochs: int = 5, batch_size: int = 8) -> None:
+def train_image(data_dir: Path, epochs: int = 5, batch_size: int = 8, max_samples: int = 10_000) -> None:
     if not data_dir.exists():
         raise SystemExit(f"Image dataset not found: {data_dir}")
 
@@ -47,7 +47,7 @@ def train_image(data_dir: Path, epochs: int = 5, batch_size: int = 8) -> None:
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
     ])
 
-    ds = datasets.ImageFolder(data_dir, transform=tfm)
+    # Build a bounded balanced subset (up to max_samples total) so development\n    # training does not consume the entire deepfake corpus.\n    subset = data_dir.parent / "image_train_subset"\n    for cls in ("real", "fake"):\n        (subset / cls).mkdir(parents=True, exist_ok=True)\n    per_class = max_samples // 2\n    selected = []\n    for cls in ("real", "fake"):\n        files = []\n        for ext in ("*.jpg", "*.jpeg", "*.png", "*.webp", "*.bmp"):\n            files.extend(sorted((data_dir / cls).glob(ext)))\n        selected.extend((cls, p) for p in files[:per_class])\n    for cls, src in selected:\n        dst = subset / cls / src.name\n        if not dst.exists():\n            try:\n                dst.hardlink_to(src)\n            except OSError:\n                import shutil\n                shutil.copy2(src, dst)\n    print(f"[image] selected {len(selected):,} images")\n    ds = datasets.ImageFolder(subset, transform=tfm)
     if len(ds.classes) != 2:
         raise SystemExit("Image dataset must contain exactly two folders: real and fake")
 
@@ -82,7 +82,7 @@ def train_image(data_dir: Path, epochs: int = 5, batch_size: int = 8) -> None:
     print("[done] deepfake_image_efficientnet_b0.pth")
 
 
-def train_video(data_dir: Path, epochs: int = 3, batch_size: int = 8) -> None:
+def train_video(data_dir: Path, epochs: int = 3, batch_size: int = 8, max_samples: int = 10_000) -> None:
     try:
         import cv2
     except ImportError as exc:
@@ -92,10 +92,7 @@ def train_video(data_dir: Path, epochs: int = 3, batch_size: int = 8) -> None:
     for cls in ["real", "fake"]:
         (frame_root / cls).mkdir(parents=True, exist_ok=True)
 
-    videos = []
-    for cls in ["real", "fake"]:
-        for ext in ("*.mp4", "*.mov", "*.avi", "*.mkv", "*.webm"):
-            videos.extend((cls, p) for p in (data_dir / cls).glob(ext))
+    videos = []\n    per_class = max_samples // 2\n    for cls in ["real", "fake"]:\n        cls_files = []\n        for ext in ("*.mp4", "*.mov", "*.avi", "*.mkv", "*.webm"):\n            cls_files.extend(sorted((data_dir / cls).glob(ext)))\n        videos.extend((cls, p) for p in cls_files[:per_class])
 
     if not videos:
         raise SystemExit(f"No videos found under {data_dir}/real and {data_dir}/fake")
@@ -113,15 +110,15 @@ def train_video(data_dir: Path, epochs: int = 3, batch_size: int = 8) -> None:
             ok, frame = cap.read()
             if not ok:
                 break
-            if count % 30 == 0:
+            if count % max(1, int((cap.get(cv2.CAP_PROP_FRAME_COUNT) or 1) // 5)) == 0:
                 cv2.imwrite(str(out_dir / f"{saved:05d}.jpg"), frame)
                 saved += 1
             count += 1
-            if saved >= 20:
+            if saved >= 5:
                 break
         cap.release()
 
-    train_image(frame_root, epochs=epochs, batch_size=batch_size)
+    train_image(frame_root, epochs=epochs, batch_size=batch_size, max_samples=max_samples)
 
 
 def main() -> None:
@@ -130,12 +127,12 @@ def main() -> None:
     parser.add_argument("--video", action="store_true")
     parser.add_argument("--data", type=Path)
     parser.add_argument("--epochs", type=int, default=5)
-    parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--batch-size", type=int, default=8)\n    parser.add_argument("--max-samples", type=int, default=10_000)
     args = parser.parse_args()
 
     if args.image:
         train_image(args.data or ROOT / "datasets" / "deepfake" / "image_dataset",
-                    args.epochs, args.batch_size)
+                    args.epochs, args.batch_size, args.max_samples)
     elif args.video:
         train_video(args.data or ROOT / "datasets" / "deepfake" / "video_dataset",
                     args.epochs, args.batch_size)
