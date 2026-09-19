@@ -219,11 +219,33 @@ def _feature_extraction(audio: np.ndarray, sample_rate: int) -> dict[str, Any]:
             - _safe_percentile(voiced_f0, 5)
         )
         pitch_cv = pitch_std / max(pitch_mean, 1.0)
+
+        periods = 1.0 / np.maximum(voiced_f0, 1e-6)
+        jitter = (
+            _safe_mean(np.abs(np.diff(periods)))
+            / max(_safe_mean(periods), 1e-9)
+        )
     else:
         pitch_mean = 0.0
         pitch_std = 0.0
         pitch_range = 0.0
         pitch_cv = 0.0
+        jitter = 0.0
+
+    voiced_rms_length = min(
+        len(rms),
+        len(voiced_mask),
+    )
+    voiced_rms = rms[:voiced_rms_length][
+        voiced_mask[:voiced_rms_length]
+    ]
+
+    shimmer = (
+        _safe_mean(np.abs(np.diff(voiced_rms)))
+        / max(_safe_mean(voiced_rms), 1e-9)
+        if voiced_rms.size > 1
+        else 0.0
+    )
 
     return {
         "duration_seconds": round(duration, 2),
@@ -234,6 +256,8 @@ def _feature_extraction(audio: np.ndarray, sample_rate: int) -> dict[str, Any]:
         "pitch_std_hz": round(pitch_std, 2),
         "pitch_range_hz": round(pitch_range, 2),
         "pitch_variation_cv": round(pitch_cv, 4),
+        "jitter": round(jitter, 5),
+        "shimmer": round(shimmer, 5),
         "spectral_centroid_mean_hz": round(_safe_mean(centroid), 2),
         "spectral_centroid_std_hz": round(_safe_std(centroid), 2),
         "spectral_bandwidth_std_hz": round(_safe_std(bandwidth), 2),
@@ -273,6 +297,8 @@ def _score_features(features: dict[str, Any]) -> tuple[float, list[str], dict[st
     flux_std = float(features["spectral_flux_std"])
     speech_ratio = float(features["speech_ratio"])
     clipping_ratio = float(features["clipping_ratio"])
+    jitter = float(features["jitter"])
+    shimmer = float(features["shimmer"])
 
     # These are weak signals. A human can naturally have stable pitch,
     # and an AI voice can deliberately introduce variation.
@@ -286,6 +312,9 @@ def _score_features(features: dict[str, Any]) -> tuple[float, list[str], dict[st
         + _variation_score(mfcc_delta, 1.0, 8.0)
     ) / 2.0
     energy_signal = _variation_score(energy_std, 2.0, 8.0)
+    jitter_signal = _variation_score(jitter, 0.002, 0.02)
+    shimmer_signal = _variation_score(shimmer, 0.01, 0.08)
+
     temporal_signal = (
         _variation_score(zcr_std, 0.005, 0.025)
         + _variation_score(flatness_std, 0.004, 0.025)
@@ -297,13 +326,17 @@ def _score_features(features: dict[str, Any]) -> tuple[float, list[str], dict[st
     components["mfcc_dynamics"] = round(mfcc_signal * 100, 2)
     components["energy_dynamics"] = round(energy_signal * 100, 2)
     components["temporal_texture"] = round(temporal_signal * 100, 2)
+    components["jitter"] = round(jitter_signal * 100, 2)
+    components["shimmer"] = round(shimmer_signal * 100, 2)
 
     score = (
-        pitch_signal * 24
-        + spectral_signal * 22
-        + mfcc_signal * 22
-        + energy_signal * 16
-        + temporal_signal * 16
+        pitch_signal * 20
+        + spectral_signal * 20
+        + mfcc_signal * 18
+        + energy_signal * 14
+        + temporal_signal * 12
+        + jitter_signal * 8
+        + shimmer_signal * 8
     )
 
     if speech_ratio < 0.15:
@@ -341,6 +374,16 @@ def _score_features(features: dict[str, Any]) -> tuple[float, list[str], dict[st
     if temporal_signal >= 0.75:
         indicators.append(
             "Temporal acoustic texture shows low natural variation."
+        )
+
+    if jitter_signal >= 0.75:
+        indicators.append(
+            "Micro-pitch variation (jitter) is unusually low."
+        )
+
+    if shimmer_signal >= 0.75:
+        indicators.append(
+            "Micro-amplitude variation (shimmer) is unusually low."
         )
 
     # Repeated weak signals are more meaningful than any single feature.
