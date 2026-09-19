@@ -6,6 +6,7 @@ from .views import (
     ImpersonationDeleteView,
     ImageAnalyzeView,
     VideoAnalyzeView,
+    VoiceAnalyzeView,
 )
 
 
@@ -20,6 +21,12 @@ urlpatterns = [
         "video/analyze/",
         VideoAnalyzeView.as_view(),
         name="video-analyze",
+    ),
+
+    path(
+        "voice/analyze/",
+        VoiceAnalyzeView.as_view(),
+        name="voice-analyze",
     ),
 
     path(
