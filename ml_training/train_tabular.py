@@ -1,4 +1,4 @@
-"""Train practical tabular Cyber Guard models.
+""""Train practical tabular Cyber Guard models.
 
 Usage:
     python -m ml_training.train_tabular --network
@@ -125,9 +125,31 @@ def train_malware() -> None:
     if dataset is None:
         raise SystemExit("EMBER dataset folder not found")
 
-    print(f"[ember] preparing features in {dataset}")
-    ember.create_vectorized_features(str(dataset))
+    vector_files = [
+        dataset / "X_train.dat",
+        dataset / "y_train.dat",
+        dataset / "X_test.dat",
+        dataset / "y_test.dat",
+    ]
+    if all(path.exists() for path in vector_files):
+        print("[ember] using existing vectorized features")
+    else:
+        print(f"[ember] vectorized features not found; preparing them in {dataset}")
+        ember.create_vectorized_features(str(dataset))
+
     X_train, y_train, X_test, y_test = ember.read_vectorized_features(str(dataset))
+
+    # EMBER uses -1 for unlabeled training samples. They must not be passed
+    # to a binary classifier. The test split is already fully labeled.
+    train_mask = np.isin(y_train, [0, 1])
+    test_mask = np.isin(y_test, [0, 1])
+    X_train = X_train[train_mask]
+    y_train = y_train[train_mask].astype(np.int32)
+    X_test = X_test[test_mask]
+    y_test = y_test[test_mask].astype(np.int32)
+
+    print(f"[ember] labeled training samples: {len(y_train):,}")
+    print(f"[ember] labeled test samples: {len(y_test):,}")
 
     model = lgb.LGBMClassifier(
         n_estimators=1000,
@@ -150,6 +172,8 @@ def train_malware() -> None:
         "ember_lightgbm",
         {
             "roc_auc": float(roc_auc_score(y_test, proba)),
+            "train_samples": int(len(y_train)),
+            "test_samples": int(len(y_test)),
             "classification_report": classification_report(
                 y_test, pred, output_dict=True, zero_division=0
             ),
@@ -176,7 +200,7 @@ def url_features(urls: pd.Series) -> pd.DataFrame:
             sum(ch.isdigit() for ch in u),
             int("https" in low),
             int("@" in u),
-            int(bool(re.search(r"\b\d{1,3}(?:\.\d{1,3}){3}\b", host))),
+            int(bool(re.search(r"\\b\\d{1,3}(?:\\.\\d{1,3}){3}\\b", host))),
             int(any(k in low for k in ["login", "verify", "secure", "account", "update", "bank"])),
         ]
 
