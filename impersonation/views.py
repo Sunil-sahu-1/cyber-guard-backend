@@ -65,6 +65,15 @@ AUDIO_EXTENSIONS = {
     ".ogg",
     ".aac",
     ".webm",
+    ".opus",
+    ".wma",
+    ".aiff",
+    ".aif",
+    ".caf",
+    ".amr",
+    ".mka",
+    ".ac3",
+    ".mp2",
 }
 
 VIDEO_EXTENSIONS = {
