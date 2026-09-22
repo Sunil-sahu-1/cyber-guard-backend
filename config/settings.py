@@ -56,6 +56,8 @@ def env_list(
 # SECURITY
 # ============================================================
 
+DATA_ENCRYPTION_KEY = os.getenv("DATA_ENCRYPTION_KEY", "").strip()
+
 DEBUG = env_bool(
     "DEBUG",
     True,
@@ -129,6 +131,7 @@ INSTALLED_APPS = [
     "anomaly_detection",
     "incidents",
     "audit_logs",
+    "security",
 ]
 
 
