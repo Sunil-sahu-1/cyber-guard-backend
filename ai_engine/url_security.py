@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 from typing import Any
+from datetime import datetime, timezone
+import socket
+import ssl
 from urllib.parse import urlparse
+
+import requests
 
 from ai_engine.google_safe_browsing import check_url_with_google
 from ai_engine.trained_classifiers import analyze_phishing_url_ml
@@ -26,6 +31,84 @@ def _clamp(score: float) -> float:
     return round(max(0.0, min(100.0, float(score))), 2)
 
 
+
+def _get_url_intelligence(final_url: str) -> dict[str, Any]:
+    parsed = urlparse(final_url)
+    host = (parsed.hostname or "").lower()
+    result: dict[str, Any] = {
+        "source_url": final_url,
+        "brand": None,
+        "tld": host.rsplit(".", 1)[-1] if "." in host else None,
+        "ip_address": None,
+        "location": None,
+        "hosting_provider": None,
+        "asn": None,
+        "certificate": None,
+        "page_title": None,
+        "status_code": None,
+        "content_type": None,
+        "detection_date": datetime.now(timezone.utc).isoformat(),
+    }
+    if not host:
+        return result
+
+    try:
+        infos = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
+        result["ip_address"] = next((item[4][0] for item in infos if item[4]), None)
+    except (OSError, socket.gaierror):
+        pass
+
+    ip = result["ip_address"]
+    if ip:
+        try:
+            geo = requests.get(f"https://ipwho.is/{ip}", timeout=3).json()
+            if geo.get("success"):
+                result["location"] = ", ".join(
+                    part for part in [geo.get("city"), geo.get("region"), geo.get("country")] if part
+                ) or None
+                connection = geo.get("connection") or {}
+                result["hosting_provider"] = connection.get("org") or connection.get("isp")
+                result["asn"] = connection.get("asn")
+        except (requests.RequestException, ValueError, TypeError):
+            pass
+
+    if parsed.scheme == "https":
+        try:
+            context = ssl.create_default_context()
+            with socket.create_connection((host, parsed.port or 443), timeout=3) as raw:
+                with context.wrap_socket(raw, server_hostname=host) as sock:
+                    cert = sock.getpeercert()
+            subject = dict(item[0] for item in cert.get("subject", ()))
+            issuer = dict(item[0] for item in cert.get("issuer", ()))
+            result["certificate"] = {
+                "subject": subject.get("commonName"),
+                "issuer": issuer.get("commonName") or issuer.get("organizationName"),
+                "valid_from": cert.get("notBefore"),
+                "valid_until": cert.get("notAfter"),
+            }
+        except (OSError, ssl.SSLError, ValueError):
+            result["certificate"] = {"status": "UNAVAILABLE"}
+
+    try:
+        response = requests.get(
+            final_url,
+            headers={"User-Agent": "GUARD-Security-Scanner/1.0"},
+            timeout=4,
+            stream=True,
+        )
+        result["status_code"] = response.status_code
+        result["content_type"] = response.headers.get("Content-Type")
+        content = response.text[:200_000]
+        response.close()
+        import re
+        title_match = re.search(r"<title[^>]*>(.*?)</title>", content, re.I | re.S)
+        if title_match:
+            result["page_title"] = re.sub(r"\\s+", " ", title_match.group(1)).strip()[:300]
+    except requests.RequestException:
+        pass
+
+    return result
+
 def analyze_url_security(url: str) -> dict[str, Any]:
     original = str(url or "").strip()
     candidate = original if "://" in original else f"https://{original}"
@@ -44,6 +127,8 @@ def analyze_url_security(url: str) -> dict[str, Any]:
 
     final_url = str(redirect.get("final_url") or candidate)
     google_original = check_url_with_google(candidate)
+    url_intelligence = _get_url_intelligence(final_url)
+
     google_final = (
         check_url_with_google(final_url)
         if final_url != candidate
@@ -131,6 +216,7 @@ def analyze_url_security(url: str) -> dict[str, Any]:
             "final_url": final_url,
             "original_domain": original_host,
             "final_domain": final_host,
+            "url_intelligence": url_intelligence,
         },
         "recommendation": (
             "Do not open the URL until it is verified."
