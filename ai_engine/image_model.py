@@ -549,24 +549,137 @@ def analyze_image_file(
     }
 
 
+def _video_metadata(
+    file_path: str,
+    capture: Any,
+    total_frames: int,
+    fps: float,
+) -> dict[str, Any]:
+    width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    duration = (
+        round(total_frames / fps, 2)
+        if fps > 0 and total_frames > 0
+        else None
+    )
+
+    return {
+        "available": True,
+        "status": "AVAILABLE",
+        "format": Path(file_path).suffix.lower().lstrip(".").upper(),
+        "width": width,
+        "height": height,
+        "fps": round(fps, 2) if fps > 0 else None,
+        "frame_count": total_frames,
+        "duration_seconds": duration,
+        "codec": "Detected by OpenCV/FFmpeg backend",
+    }
+
+
+def _basic_video_heuristics(
+    frames: list[Any],
+    face_counts: list[int],
+) -> tuple[float, dict[str, Any], list[str]]:
+    if not frames:
+        return 0.0, {}, ["No readable video frames were available."]
+
+    brightness = [float(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).mean()) for frame in frames]
+    sharpness = [
+        float(cv2.Laplacian(
+            cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY),
+            cv2.CV_64F,
+        ).var())
+        for frame in frames
+    ]
+    edge_density = []
+    for frame in frames:
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        edges = cv2.Canny(gray, 100, 200)
+        edge_density.append(float((edges > 0).mean()))
+
+    frame_diffs = []
+    for previous, current in zip(frames, frames[1:]):
+        previous_gray = cv2.cvtColor(previous, cv2.COLOR_BGR2GRAY)
+        current_gray = cv2.cvtColor(current, cv2.COLOR_BGR2GRAY)
+        previous_gray = cv2.resize(previous_gray, (160, 90))
+        current_gray = cv2.resize(current_gray, (160, 90))
+        frame_diffs.append(
+            float(cv2.absdiff(previous_gray, current_gray).mean())
+        )
+
+    signals: list[str] = []
+    score = 0.0
+
+    face_frames = sum(1 for count in face_counts if count > 0)
+    multiple_face_frames = sum(1 for count in face_counts if count > 1)
+
+    if face_frames == 0:
+        signals.append("No face was detected in the sampled frames.")
+    else:
+        face_ratio = face_frames / len(frames)
+        signals.append(
+            f"Face detected in {face_frames}/{len(frames)} sampled frames."
+        )
+        if face_ratio < 0.40:
+            score += 10
+            signals.append("Face visibility changed substantially across sampled frames.")
+
+    if multiple_face_frames:
+        signals.append(
+            f"Multiple faces were detected in {multiple_face_frames} sampled frames."
+        )
+
+    brightness_range = max(brightness) - min(brightness)
+    if brightness_range > 80:
+        score += 10
+        signals.append("Large frame-to-frame brightness variation detected.")
+
+    if sharpness and sum(sharpness) / len(sharpness) < 80:
+        score += 10
+        signals.append("Several sampled frames contain low-detail or blurred regions.")
+
+    if frame_diffs:
+        mean_motion = sum(frame_diffs) / len(frame_diffs)
+        motion_std = (
+            sum((value - mean_motion) ** 2 for value in frame_diffs)
+            / len(frame_diffs)
+        ) ** 0.5
+        if motion_std > 18:
+            score += 15
+            signals.append(
+                "Irregular frame-to-frame visual change was detected."
+            )
+    else:
+        mean_motion = 0.0
+        motion_std = 0.0
+
+    mean_edge_density = (
+        sum(edge_density) / len(edge_density)
+        if edge_density else 0.0
+    )
+
+    metrics = {
+        "brightness_mean": round(sum(brightness) / len(brightness), 2),
+        "brightness_range": round(brightness_range, 2),
+        "sharpness_mean": round(sum(sharpness) / len(sharpness), 2),
+        "edge_density_mean": round(mean_edge_density, 4),
+        "mean_frame_difference": round(mean_motion, 2),
+        "frame_difference_std": round(motion_std, 2),
+        "sampled_frames": len(frames),
+        "face_frames": face_frames,
+        "multiple_face_frames": multiple_face_frames,
+    }
+
+    return min(100.0, score), metrics, signals
+
+
 def analyze_video_file(
     file_path: str,
     file_name: str,
     file_size: int,
     max_frames: int = 16,
 ) -> dict[str, Any]:
-    return {
-        "is_valid": False,
-        "prediction": "VIDEO_MODEL_NOT_AVAILABLE",
-        "risk_score": 0.0,
-        "severity": "SAFE",
-        "error": "Deepfake video detection is disabled because no video-specific trained model is currently included in Cyber Guard.",
-    }
-
-
-    extension = Path(
-        file_name
-    ).suffix.lower()
+    extension = Path(file_name).suffix.lower()
 
     if file_size <= 0:
         return {
@@ -595,144 +708,120 @@ def analyze_video_file(
             "error": "Unsupported video format.",
         }
 
-    pipeline = prepare_video(
-        file_path,
-        max_frames=max_frames,
-    )
-
-    if not pipeline["tensors"]:
-
+    capture = cv2.VideoCapture(str(file_path))
+    if not capture.isOpened():
         return {
-            "analysis_type": "advanced_deepfake_video",
-            "is_valid": True,
+            "is_valid": False,
+            "prediction": "MEDIA_READ_ERROR",
             "risk_score": 0.0,
             "severity": "SAFE",
-            "prediction": "NO_FACE_DETECTED",
-            "confidence": 0.50,
-            "indicators": [
-                "No detectable face was found in sampled frames."
-            ],
-            "features": {
-                "frames_analyzed": pipeline[
-                    "frames_analyzed"
-                ],
-                "face_frames": pipeline[
-                    "face_frames"
-                ],
-                "face_detected": False,
-            },
-            "recommendation": (
-                "No face was available for deepfake analysis."
-            ),
+            "error": "Unable to open the video.",
         }
 
-    import torch
-
-    batch = torch.stack(
-        pipeline["tensors"]
+    total_frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
+    metadata = _video_metadata(
+        file_path,
+        capture,
+        total_frames,
+        fps,
     )
 
-    ensemble = get_model_ensemble()
-
-    model_result = ensemble.predict(
-        batch
-    )
-
-    frame_scores = (
-        model_result[
-            "ensemble_scores"
-        ]
-    )
-
-    spatial_score = (
-        sum(frame_scores)
-        / len(frame_scores)
-    )
-
-    temporal_score = _temporal_score(
-        frame_scores
-    )
-
-    # Temporal signal has a lower weight because
-    # volatility alone is not proof of a deepfake.
-    final_score = _clamp(
-        (
-            spatial_score * 0.85
-            + temporal_score * 0.15
+    frames = []
+    if total_frames > 0:
+        import numpy as np
+        indices = np.linspace(
+            0,
+            total_frames - 1,
+            min(max_frames, total_frames),
+            dtype=int,
         )
+        for index in indices:
+            capture.set(cv2.CAP_PROP_POS_FRAMES, int(index))
+            ok, frame = capture.read()
+            if ok and frame is not None:
+                frames.append(frame)
+
+    capture.release()
+
+    if not frames:
+        return {
+            "is_valid": False,
+            "prediction": "MEDIA_READ_ERROR",
+            "risk_score": 0.0,
+            "severity": "SAFE",
+            "error": "No readable frames were found in the video.",
+        }
+
+    face_counts = [len(detect_faces(frame)) for frame in frames]
+    face_detection = {
+        "detected": any(count > 0 for count in face_counts),
+        "face_frames": sum(1 for count in face_counts if count > 0),
+        "sampled_frames": len(frames),
+        "face_counts_per_frame": face_counts,
+        "multiple_face_frames": sum(1 for count in face_counts if count > 1),
+        "method": "OpenCV Haar Cascade",
+        "note": (
+            "Basic face detection only. It does not prove that a detected "
+            "face is real or manipulated."
+        ),
+    }
+
+    score, visual_metrics, indicators = _basic_video_heuristics(
+        frames,
+        face_counts,
     )
 
-    severity = _severity(
-        final_score
-    )
+    visual_artifacts = {
+        "available": True,
+        "artifact_score": round(score, 2),
+        "signals": indicators,
+        "metrics": visual_metrics,
+        "note": (
+            "These are basic video heuristics. A trained video deepfake "
+            "model will be added later."
+        ),
+    }
 
-    indicators = [
-        f"{len(frame_scores)} face frames analyzed by AI ensemble."
-    ]
+    severity = _severity(score)
 
-    if temporal_score >= 15:
-        indicators.append(
-            "Elevated temporal inconsistency signal detected."
-        )
-
-    if final_score >= 60:
-        indicators.append(
-            "AI ensemble indicates elevated deepfake probability."
-        )
-
-    if not model_result[
-        "is_fine_tuned"
-    ]:
-        indicators.append(
-            "Deepfake-specific model fine-tuning is still required."
-        )
+    if score >= 60:
+        prediction = "BASIC_VIDEO_SUSPICIOUS"
+    elif score >= 20:
+        prediction = "BASIC_VIDEO_REVIEW"
+    else:
+        prediction = "NO_MAJOR_BASIC_VIDEO_ANOMALY"
 
     return {
-        "analysis_type": "advanced_deepfake_video",
+        "analysis_type": "basic_video_heuristic",
         "is_valid": True,
-        "risk_score": final_score,
+        "risk_score": round(score, 2),
         "severity": severity,
-        "prediction": _prediction(
-            final_score
-        ),
-        "confidence": _confidence(
-            final_score
+        "prediction": prediction,
+        "confidence": round(
+            max(score, 100.0 - score) / 100.0,
+            4,
         ),
         "indicators": indicators,
+        "face_detection": face_detection,
+        "visual_artifacts": visual_artifacts,
+        "metadata": metadata,
         "features": {
-            "frames_analyzed": pipeline[
-                "frames_analyzed"
-            ],
-            "face_frames": pipeline[
-                "face_frames"
-            ],
-            "face_detected": pipeline[
-                "face_detected"
-            ],
-            "multiple_faces": pipeline[
-                "multiple_faces"
-            ],
-            "frame_scores": frame_scores,
-            "temporal_score": temporal_score,
-            "spatial_score": round(
-                spatial_score,
-                2,
+            "frames_analyzed": len(frames),
+            "face_detected": face_detection["detected"],
+            "face_frames": face_detection["face_frames"],
+            "multiple_faces": face_detection["multiple_face_frames"] > 0,
+            "heuristic_score": round(score, 2),
+            "trained_video_model": False,
+            "analysis_note": (
+                "Basic OpenCV video analysis is active. "
+                "No trained video deepfake classifier is used yet."
             ),
-            "models_used": model_result[
-                "models_used"
-            ],
-            "fine_tuned_models": model_result[
-                "fine_tuned_models"
-            ],
-            "model_predictions": model_result[
-                "model_predictions"
-            ],
-            "device": model_result[
-                "device"
-            ],
         },
-        "recommendation": _recommendation(
-            severity
+        "recommendation": (
+            "Use this result as a basic screening signal. "
+            "Do not treat it as a definitive deepfake verdict until "
+            "a video-specific trained model is added."
         ),
     }
 
