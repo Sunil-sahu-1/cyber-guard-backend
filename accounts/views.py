@@ -11,6 +11,7 @@ from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 
 from rest_framework import generics, status
 from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -237,6 +238,8 @@ class RegisterView(
     generics.CreateAPIView
 ):
     queryset = User.objects.all()
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "register"
 
     serializer_class = RegisterSerializer
 
@@ -271,6 +274,8 @@ class LoginView(APIView):
     permission_classes = [
         AllowAny
     ]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "login"
 
     def post(
         self,
@@ -558,6 +563,8 @@ class LoginView(APIView):
 
 class PasswordResetRequestView(APIView):
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "password_reset"
 
     def post(self, request):
         email = str(request.data.get("email", "")).strip().lower()
@@ -629,6 +636,8 @@ class PasswordResetRequestView(APIView):
 
 class PasswordResetConfirmView(APIView):
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "password_reset_confirm"
 
     def post(self, request, uidb64, token):
         password = request.data.get("password")
