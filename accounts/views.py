@@ -16,6 +16,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.views import TokenRefreshView
 
 from audit_logs.models import AuditLog
 
@@ -232,6 +233,11 @@ def _audit_login_failure(
         description=description,
         status="FAILED",
     )
+
+
+class SecureTokenRefreshView(TokenRefreshView):
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "token_refresh"
 
 
 class RegisterView(
