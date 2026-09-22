@@ -95,3 +95,6 @@ uvicorn>=0.34,<1.0
 # ------------------------------------------------------------
 
 argon2-cffi>=23.1,<26.0
+
+# Database / application encryption
+cryptography>=46,<47
