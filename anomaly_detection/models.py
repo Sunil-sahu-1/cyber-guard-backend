@@ -1,6 +1,8 @@
 from django.conf import settings
 from django.db import models
 
+from security.fields import EncryptedJSONField, EncryptedTextField
+
 
 class UserBehaviour(models.Model):
 
@@ -29,21 +31,21 @@ class UserBehaviour(models.Model):
         blank=True,
     )
 
-    user_agent = models.TextField(
+    user_agent = EncryptedTextField(
         blank=True,
     )
 
-    location = models.CharField(
+    location = EncryptedTextField(
         max_length=255,
         blank=True,
     )
 
-    device_id = models.CharField(
+    device_id = EncryptedTextField(
         max_length=255,
         blank=True,
     )
 
-    activity_data = models.JSONField(
+    activity_data = EncryptedJSONField(
         default=dict,
         blank=True,
     )
@@ -75,16 +77,16 @@ class LoginActivity(models.Model):
         blank=True,
     )
 
-    user_agent = models.TextField(
+    user_agent = EncryptedTextField(
         blank=True,
     )
 
-    location = models.CharField(
+    location = EncryptedTextField(
         max_length=255,
         blank=True,
     )
 
-    device_id = models.CharField(
+    device_id = EncryptedTextField(
         max_length=255,
         blank=True,
     )
@@ -95,7 +97,7 @@ class LoginActivity(models.Model):
         default="SUCCESS",
     )
 
-    failure_reason = models.CharField(
+    failure_reason = EncryptedTextField(
         max_length=255,
         blank=True,
     )
@@ -157,7 +159,7 @@ class Anomaly(models.Model):
         default="DETECTED",
     )
 
-    explanation = models.TextField(
+    explanation = EncryptedTextField(
         blank=True,
     )
 
