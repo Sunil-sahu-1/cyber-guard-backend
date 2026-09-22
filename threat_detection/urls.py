@@ -6,6 +6,7 @@ ThreatDetailView,
 ThreatAnalyzeView,
 ThreatDeleteView,
 MalwareAnalyzeView,
+SelfProtectionIPLookupView,
 )
 
 urlpatterns = [
@@ -27,6 +28,12 @@ path(
     "malware/analyze/",
     MalwareAnalyzeView.as_view(),
     name="malware-analyze",
+),
+
+path(
+    "self-protection/ip-lookup/",
+    SelfProtectionIPLookupView.as_view(),
+    name="self-protection-ip-lookup",
 ),
 
 path(
