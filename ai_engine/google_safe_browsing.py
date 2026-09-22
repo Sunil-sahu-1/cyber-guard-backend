@@ -32,6 +32,7 @@ def check_url_with_google(url: str, timeout: int = 8) -> dict[str, Any]:
     result: dict[str, Any] = {
         "enabled": bool(api_key),
         "checked": False,
+        "status": "NOT_CONFIGURED" if not api_key else "PENDING",
         "safe": None,
         "matched": False,
         "matches": [],
@@ -42,6 +43,7 @@ def check_url_with_google(url: str, timeout: int = 8) -> dict[str, Any]:
 
     if not api_key:
         result["error"] = "GOOGLE_SAFE_BROWSING_API_KEY is not configured."
+        result["status"] = "NOT_CONFIGURED"
         return result
 
     payload = {
@@ -91,13 +93,16 @@ def check_url_with_google(url: str, timeout: int = 8) -> dict[str, Any]:
                 "safe": len(normalized_matches) == 0,
                 "matched": bool(normalized_matches),
                 "matches": normalized_matches,
+                "status": "THREAT_FOUND" if normalized_matches else "SAFE",
             }
         )
         return result
 
     except requests.RequestException as exc:
         result["error"] = f"Google Safe Browsing request failed: {exc}"
+        result["status"] = "ERROR"
         return result
     except ValueError as exc:
         result["error"] = f"Google Safe Browsing returned invalid JSON: {exc}"
+        result["status"] = "ERROR"
         return result
