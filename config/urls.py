@@ -40,11 +40,6 @@ urlpatterns = [
     ),
 
    
-    path(
-        "api/anomaly/",
-        include("anomaly_detection.urls"),
-    ),
-
 
     path(
         "api/incidents/",
