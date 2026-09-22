@@ -40,6 +40,7 @@ from PIL import Image, ExifTags
 from ai_engine.deepfake_models import (
     get_model_ensemble,
 )
+from ai_engine.web_image_tracking import track_image_on_public_web
 
 
 
@@ -435,6 +436,7 @@ def _analyze_no_face_result(
         "face_detection": face_detection,
         "visual_artifacts": visual_artifacts,
         "metadata": metadata,
+        "web_presence": web_presence,
         "features": {
             "face_detected": False,
             "face_count": 0,
@@ -476,13 +478,16 @@ def analyze_image_file(
     face_detection = _build_face_detection(pipeline)
     visual_artifacts = _analyze_visual_artifacts(file_path)
     metadata = _extract_metadata(file_path)
+    web_presence = track_image_on_public_web(file_path)
 
     if not pipeline["tensors"]:
-        return _analyze_no_face_result(
+        result = _analyze_no_face_result(
             face_detection,
             visual_artifacts,
             metadata,
         )
+        result["web_presence"] = web_presence
+        return result
 
     import torch
 
