@@ -405,6 +405,14 @@ def analyze_video_file(
     file_size: int,
     max_frames: int = 16,
 ) -> dict[str, Any]:
+    return {
+        "is_valid": False,
+        "prediction": "VIDEO_MODEL_NOT_AVAILABLE",
+        "risk_score": 0.0,
+        "severity": "SAFE",
+        "error": "Deepfake video detection is disabled because no video-specific trained model is currently included in Cyber Guard.",
+    }
+
 
     extension = Path(
         file_name
