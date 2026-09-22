@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import Any
 
 import requests
@@ -99,7 +100,9 @@ def check_url_with_google(url: str, timeout: int = 8) -> dict[str, Any]:
         return result
 
     except requests.RequestException as exc:
-        result["error"] = f"Google Safe Browsing request failed: {exc}"
+        safe_error = str(exc)
+        safe_error = re.sub(r"([?&]key=)[^&\\s]+", r"\\1[REDACTED]", safe_error)
+        result["error"] = f"Google Safe Browsing request failed: {safe_error}"
         result["status"] = "ERROR"
         return result
     except ValueError as exc:
