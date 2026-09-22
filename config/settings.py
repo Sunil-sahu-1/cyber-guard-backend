@@ -128,7 +128,6 @@ INSTALLED_APPS = [
     "threat_detection",
     "phishing",
     "impersonation",
-    "anomaly_detection",
     "incidents",
     "audit_logs",
     "security",
