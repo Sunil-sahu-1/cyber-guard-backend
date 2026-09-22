@@ -131,7 +131,8 @@ class APIAccessSecurityTests(APITestCase):
         )
 
         self.assertEqual(response.status_code, 400)
+        payload = response.json()
         self.assertIn(
             "too long",
-            str(response.data.get("detail", "")).lower(),
+            str(payload.get("detail", "")).lower(),
         )
