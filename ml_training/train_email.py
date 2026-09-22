@@ -1,14 +1,4 @@
-"""Train a lightweight phishing-email classifier.
 
-Input:
-    datasets/phishing/emails/*.csv
-
-Required columns:
-    text/body/content
-    label/class/target
-
-The model uses TF-IDF + Logistic Regression.
-"""
 
 from __future__ import annotations
 
