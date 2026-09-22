@@ -20,6 +20,7 @@ from ai_engine.image_model import (
     analyze_image_file,
     analyze_video_file,
 )
+from ai_engine.web_image_tracker import analyze_public_web_presence
 from ai_engine.voice_model import analyze_voice_file
 from ai_engine.risk_engine import analyze_risk
 
@@ -831,6 +832,21 @@ def _run_media_analysis(
                         "Request a valid image for "
                         "forensic verification."
                     ),
+                }
+
+            # Public-web provenance is an independent evidence layer.
+            # It never changes the trained deepfake score.
+            try:
+                result["web_presence"] = analyze_public_web_presence(
+                    temp_path,
+                    uploaded_file.name,
+                )
+            except Exception as error:
+                result["web_presence"] = {
+                    "status": "ERROR",
+                    "message": "Public-web image tracking failed.",
+                    "error": str(error),
+                    "matches": [],
                 }
 
             return result
