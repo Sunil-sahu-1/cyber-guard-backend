@@ -2,7 +2,7 @@
 
 Input: datasets/voice/voice_manifest.csv with columns path,label.
 Labels: 0/real/bonafide/human or 1/spoof/fake/ai/synthetic.
-Default: 10,000 balanced audio files.
+Default: 500 balanced audio files (250 real + 250 spoof).
 
 This is a lightweight development classifier. The existing voice API can be
 integrated with this artifact after validation on held-out ASVspoof samples.
@@ -49,7 +49,7 @@ def features(path):
 def main():
     p=argparse.ArgumentParser()
     p.add_argument("--manifest",type=Path,default=DATA/"voice_manifest.csv")
-    p.add_argument("--max-samples",type=int,default=10000)
+    p.add_argument("--max-samples",type=int,default=500)
     args=p.parse_args()
     if not args.manifest.exists():
         raise SystemExit(f"Create {args.manifest} with columns: path,label")
