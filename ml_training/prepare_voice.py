@@ -57,7 +57,7 @@ def detect_label(item: dict) -> int | None:
             candidates.append(item[key])
 
     haystack = " ".join(str(x) for x in candidates if x).lower()
-    if any(token in haystack for token in ("bona-fide", "bonafide", "bona_fide")):
+    if any(token in haystack for token in ("bona-fide", "bonafide", "bona_fide", "original", "real", "human")):
         return 0
     if any(token in haystack for token in ("spoof", "fake", "synthetic")):
         return 1
@@ -70,15 +70,18 @@ def main() -> None:
     FAKE.mkdir(parents=True, exist_ok=True)
 
     ds = load_dataset(DATASET_ID, split="train", streaming=True)
+    ds = ds.shuffle(seed=42, buffer_size=1000)
 
     real_count = 0
     fake_count = 0
+    scanned = 0
 
     print(f"[voice] source: {DATASET_ID}")
     print("[voice] target: 250 real + 250 spoof")
     print("[voice] clip length: <= 5 seconds, 16 kHz mono")
 
     for item in ds:
+        scanned += 1
         label = detect_label(item)
 
         if label is None:
@@ -122,8 +125,8 @@ def main() -> None:
 
         sf.write(path, audio, sample_rate, subtype="PCM_16")
 
-        if (real_count + fake_count) % 50 == 0:
-            print(f"[voice] {real_count}/250 real, {fake_count}/250 spoof")
+        if (real_count + fake_count) % 25 == 0:
+            print(f"[voice] {real_count}/250 real, {fake_count}/250 spoof (scanned {scanned})")
 
         if real_count >= PER_CLASS and fake_count >= PER_CLASS:
             break
@@ -146,6 +149,8 @@ def main() -> None:
             writer.writerow([path.relative_to(ROOT).as_posix(), 1])
 
     total_bytes = sum(p.stat().st_size for p in VOICE.rglob("*.wav"))
+    if total_bytes > 500 * 1024 * 1024:
+        raise SystemExit(f"Voice dataset exceeds 500 MB: {total_bytes / (1024 * 1024):.1f} MB")
     print(f"[done] {real_count} real + {fake_count} spoof")
     print(f"[done] audio size: {total_bytes / (1024 * 1024):.1f} MB")
     print(f"[done] manifest: {manifest}")
