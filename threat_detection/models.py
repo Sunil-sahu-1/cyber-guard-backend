@@ -1,6 +1,8 @@
 from django.conf import settings
 from django.db import models
 
+from security.fields import EncryptedJSONField, EncryptedTextField
+
 
 class Threat(models.Model):
 
@@ -65,7 +67,7 @@ class Threat(models.Model):
         choices=SOURCE_TYPE_CHOICES,
     )
 
-    input_data = models.TextField(
+    input_data = EncryptedTextField(
         blank=True,
     )
 
@@ -85,7 +87,7 @@ class Threat(models.Model):
         default="DETECTED",
     )
 
-    explanation = models.TextField(
+    explanation = EncryptedTextField(
         blank=True,
     )
 
@@ -117,7 +119,7 @@ class ThreatEvidence(models.Model):
         max_length=100,
     )
 
-    evidence_value = models.TextField(
+    evidence_value = EncryptedTextField(
         blank=True,
     )
 
@@ -165,7 +167,7 @@ class ThreatAnalysis(models.Model):
         default=0,
     )
 
-    analysis_result = models.JSONField(
+    analysis_result = EncryptedJSONField(
         default=dict,
         blank=True,
     )
