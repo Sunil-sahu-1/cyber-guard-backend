@@ -43,6 +43,10 @@ from .models import (
 from .serializers import ThreatSerializer
 
 
+# Maximum accepted malware/Android APK upload size: 200 MiB.
+MAX_MALWARE_UPLOAD_SIZE = 200 * 1024 * 1024
+
+
 # ============================================================================
 # GENERAL HELPERS
 # ============================================================================
@@ -761,6 +765,15 @@ class MalwareAnalyzeView(APIView):
             return Response({"detail": "file is required."}, status=status.HTTP_400_BAD_REQUEST)
         if uploaded.size <= 0:
             return Response({"detail": "Uploaded file is empty."}, status=status.HTTP_400_BAD_REQUEST)
+        if uploaded.size > MAX_MALWARE_UPLOAD_SIZE:
+            return Response(
+                {
+                    "detail": "File is too large. Maximum allowed upload size is 200 MB.",
+                    "max_size_mb": 200,
+                    "file_size_mb": round(uploaded.size / (1024 * 1024), 2),
+                },
+                status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            )
 
         suffix = os.path.splitext(uploaded.name)[1].lower()
         temp_path = None
