@@ -6,10 +6,10 @@ This directory contains reproducible dataset download and model-training entry p
 
 | Module | Dataset | Model |
 |---|---|---|
-| Voice deepfake | ASVspoof 2019 LA + ASVspoof 2021 DF | AASIST-L / AASIST |
+| Voice deepfake | 500-sample MLAAD-tiny subset (250 real + 250 spoof) | MFCC/audio features + Random Forest baseline |
 | Voice replay | ASVspoof 2021 PA | AASIST-style anti-spoofing pipeline |
 | Image deepfake | FaceForensics++ | EfficientNet-B0 transfer learning |
-| Video deepfake | DFDC + FaceForensics++ | EfficientNet-B0 frame model + video aggregation |
+| Video deepfake | Skipped for current Cyber Guard scope | — |
 | Network anomaly | CIC-IDS2017 | XGBoost |
 | Malware | EMBER 2018 | LightGBM |
 | Phishing URL | PhishTank + benign URL corpus | LightGBM |
@@ -32,11 +32,13 @@ Or train one module:
     python -m ml_training.train_tabular --malware
     python -m ml_training.train_tabular --phishing-url
 
-For deepfake and voice training, use the dedicated commands described by the script:
+For current deepfake and voice training:
 
     python -m ml_training.train_media --image
-    python -m ml_training.train_media --video
-    python -m ml_training.train_voice --track DF
+    python ml_training/prepare_voice.py
+    python -m ml_training.train_voice_small --max-samples 500
+
+Video deepfake training is intentionally skipped in the current scope.
 
 Outputs are stored under:
 
