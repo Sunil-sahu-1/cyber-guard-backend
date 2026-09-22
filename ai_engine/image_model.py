@@ -35,17 +35,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import cv2
 from PIL import Image, ExifTags
 
 from ai_engine.deepfake_models import (
     get_model_ensemble,
 )
 
-from ai_engine.media_pipeline import (
-    prepare_image,
-    prepare_video,
-)
 
 
 MAX_FILE_SIZE = 20 * 1024 * 1024
@@ -330,6 +325,7 @@ def _extract_metadata(file_path: str) -> dict[str, Any]:
 
 
 def _analyze_visual_artifacts(file_path: str) -> dict[str, Any]:
+    import cv2
     result: dict[str, Any] = {
         "available": False,
         "artifact_score": 0.0,
@@ -464,6 +460,8 @@ def analyze_image_file(
     if not basic["is_valid"]:
         return basic
 
+    from ai_engine.media_pipeline import prepare_image
+
     pipeline = prepare_image(file_path)
 
     if not pipeline["success"]:
@@ -555,6 +553,8 @@ def _video_metadata(
     total_frames: int,
     fps: float,
 ) -> dict[str, Any]:
+    import cv2
+
     width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
     duration = (
@@ -580,6 +580,8 @@ def _basic_video_heuristics(
     frames: list[Any],
     face_counts: list[int],
 ) -> tuple[float, dict[str, Any], list[str]]:
+    import cv2
+
     if not frames:
         return 0.0, {}, ["No readable video frames were available."]
 
@@ -679,6 +681,9 @@ def analyze_video_file(
     file_size: int,
     max_frames: int = 16,
 ) -> dict[str, Any]:
+    import cv2
+    from ai_engine.media_pipeline import detect_faces
+
     extension = Path(file_name).suffix.lower()
 
     if file_size <= 0:
