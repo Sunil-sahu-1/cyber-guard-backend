@@ -27,7 +27,8 @@ EMBER_SHA256 = (
 )
 
 MANUAL = {
-    "ASVspoof 2021 DF": "https://zenodo.org/records/4835108",
+    "MLAAD-tiny voice subset (500 samples prepared by project script)": "https://huggingface.co/datasets/mueller91/MLAAD-tiny",
+    "ASVspoof 2021 DF (large, manual)": "https://zenodo.org/records/4835108",
     "ASVspoof 2021 PA": "https://zenodo.org/records/4834716",
     "ASVspoof 2019 / AASIST training": "https://github.com/clovaai/aasist",
     "FaceForensics++": "https://github.com/ondyari/FaceForensics",
