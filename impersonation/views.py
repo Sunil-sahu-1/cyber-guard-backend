@@ -354,6 +354,10 @@ def _create_threat(
             "metadata",
             {},
         ),
+        "web_presence": ai_result.get(
+            "web_presence",
+            {},
+        ),
     }
 
     return Threat.objects.create(
