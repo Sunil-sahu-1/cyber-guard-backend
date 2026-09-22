@@ -179,6 +179,41 @@ REGISTRATION_KEYWORDS = {
 }
 
 
+
+
+# ============================================================================
+# SPAM / UNSOLICITED MESSAGE KEYWORDS
+# ============================================================================
+
+SPAM_KEYWORDS = {
+    "you have won",
+    "you are a winner",
+    "winner",
+    "claim your prize",
+    "claim prize",
+    "lottery",
+    "jackpot",
+    "cash prize",
+    "prize money",
+    "congratulations you won",
+    "make money fast",
+    "earn money fast",
+    "easy money",
+    "work from home",
+    "guaranteed income",
+    "double your money",
+    "investment opportunity",
+    "free gift",
+    "free money",
+    "click here now",
+    "act now",
+    "exclusive deal",
+    "limited time",
+    "risk free",
+    "no obligation",
+}
+
+
 PROMOTIONAL_CTA_KEYWORDS = {
     "learn more",
     "get started",
@@ -507,6 +542,60 @@ def _detect_promotional_content(
         "registration_keywords": registration_keywords,
         "promotional_cta_keywords": promotional_cta_keywords,
         "unsubscribe_detected": unsubscribe_detected,
+    }
+
+
+# ============================================================================
+# SPAM ANALYSIS
+# ============================================================================
+
+def _detect_spam_content(
+    spam_keywords: list[str],
+    urls: list[str],
+    suspicious_attachments: list[str],
+    excessive_caps: bool,
+    excessive_exclamation: bool,
+    text: str,
+) -> dict[str, Any]:
+    """Detect common unsolicited/spam patterns without treating marketing as spam by default."""
+
+    score = 0
+    reasons: list[str] = []
+
+    score += min(60, len(spam_keywords) * 8)
+    if spam_keywords:
+        reasons.append("Spam-like phrases detected.")
+
+    if excessive_caps:
+        score += 8
+        reasons.append("Unusually high uppercase usage.")
+
+    if excessive_exclamation:
+        score += 8
+        reasons.append("Repeated exclamation marks.")
+
+    if len(urls) >= 4:
+        score += 10
+        reasons.append("Message contains many links.")
+
+    if suspicious_attachments:
+        score += min(20, len(suspicious_attachments) * 8)
+        reasons.append("Potentially risky attachment names detected.")
+
+    # Very short messages made almost entirely of promotional bait are more
+    # likely to be spam than normal transactional mail.
+    word_count = len(re.findall(r"\b\w+\b", text))
+    if word_count <= 12 and (spam_keywords or len(urls) >= 2):
+        score += 8
+        reasons.append("Very short message contains unsolicited-action signals.")
+
+    score = min(score, 100)
+
+    return {
+        "detected": score >= 20,
+        "score": score,
+        "keywords": spam_keywords,
+        "reasons": reasons,
     }
 
 
@@ -1016,6 +1105,20 @@ def analyze_text(
         text=text,
     )
 
+    spam_keywords = _find_keywords(
+        text,
+        SPAM_KEYWORDS,
+    )
+
+    spam = _detect_spam_content(
+        spam_keywords=spam_keywords,
+        urls=urls,
+        suspicious_attachments=suspicious_attachments,
+        excessive_caps=excessive_caps,
+        excessive_exclamation=excessive_exclamation,
+        text=text,
+    )
+
     # =========================================================================
     # URL ANALYSIS
     # =========================================================================
@@ -1328,6 +1431,9 @@ def analyze_text(
     elif score >= 40:
         prediction = "SUSPICIOUS"
 
+    elif spam["detected"]:
+        prediction = "SPAM"
+
     elif promotional["detected"]:
         prediction = "PROMOTIONAL"
 
@@ -1355,6 +1461,9 @@ def analyze_text(
 
     elif promotional_suspicious_link:
         confidence = 0.70
+
+    elif spam["detected"]:
+        confidence = 0.72
 
     elif promotional["detected"]:
         confidence = 0.75
@@ -1400,6 +1509,12 @@ def analyze_text(
         recommendation = (
             "Verify the sender and link before taking action. "
             "Avoid entering passwords or personal information."
+        )
+
+    elif prediction == "SPAM":
+        recommendation = (
+            "This message contains common spam signals. "
+            "Avoid clicking links, downloading attachments, or sharing personal information."
         )
 
     elif prediction == "PROMOTIONAL":
@@ -1487,7 +1602,25 @@ def analyze_text(
             "promotional_suspicious_link": (
                 promotional_suspicious_link
             ),
+
+            # Spam tracking
+            "spam_detected": spam["detected"],
+            "spam_score": spam["score"],
+            "spam_keywords": spam["keywords"],
+            "spam_reasons": spam["reasons"],
         },
+
+        "content_category": (
+            "PHISHING"
+            if prediction in {"PHISHING", "LIKELY_PHISHING"}
+            else "SUSPICIOUS"
+            if prediction == "SUSPICIOUS"
+            else "SPAM"
+            if prediction == "SPAM"
+            else "PROMOTIONAL"
+            if prediction == "PROMOTIONAL"
+            else "LEGITIMATE"
+        ),
 
         # Simple user-friendly explanation
         "explanation": explanation,
