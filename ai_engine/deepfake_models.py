@@ -39,18 +39,14 @@ MODEL_DIR.mkdir(
 )
 
 
+MODEL_DIR = Path(__file__).resolve().parents[1] / "trained_models"
+
+# Only use checkpoints that were actually trained for Cyber Guard.
+# Untrained ImageNet backbones are not presented as deepfake detectors.
 MODEL_CONFIGS = {
-    "efficientnet": {
+    "efficientnet_b0_trained": {
         "architecture": "tf_efficientnet_b0",
-        "checkpoint": MODEL_DIR / "efficientnet_deepfake.pth",
-    },
-    "xception": {
-        "architecture": "xception",
-        "checkpoint": MODEL_DIR / "xception_deepfake.pth",
-    },
-    "vit": {
-        "architecture": "vit_base_patch16_224",
-        "checkpoint": MODEL_DIR / "vit_deepfake.pth",
+        "checkpoint": MODEL_DIR / "deepfake_image_efficientnet_b0.pth",
     },
 }
 
