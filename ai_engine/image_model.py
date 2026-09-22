@@ -436,7 +436,6 @@ def _analyze_no_face_result(
         "face_detection": face_detection,
         "visual_artifacts": visual_artifacts,
         "metadata": metadata,
-        "web_presence": web_presence,
         "features": {
             "face_detected": False,
             "face_count": 0,
@@ -539,6 +538,7 @@ def analyze_image_file(
         "face_detection": face_detection,
         "visual_artifacts": visual_artifacts,
         "metadata": metadata,
+        "web_presence": web_presence,
         "features": {
             "face_detected": True,
             "face_count": pipeline["face_count"],
