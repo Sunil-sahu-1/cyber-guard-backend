@@ -47,6 +47,7 @@ MODEL_CONFIGS = {
     "efficientnet_b0_trained": {
         "architecture": "tf_efficientnet_b0",
         "checkpoint": MODEL_DIR / "deepfake_image_efficientnet_b0.pth",
+        "classes": ["fake", "real"],
     },
 }
 
@@ -146,6 +147,7 @@ class DeepfakeModelEnsemble:
                 config["checkpoint"],
             )
 
+            model.cyber_guard_classes = config.get("classes", ["fake", "real"])
             model.to(DEVICE)
             model.eval()
 
@@ -182,9 +184,9 @@ class DeepfakeModelEnsemble:
                     dim=1,
                 )
 
-                fake_probability = (
-                    probabilities[:, 1]
-                )
+                classes = config_classes = getattr(model, "cyber_guard_classes", ["fake", "real"])
+                fake_index = classes.index("fake") if "fake" in classes else 1
+                fake_probability = probabilities[:, fake_index]
 
                 predictions[name] = [
                     round(
