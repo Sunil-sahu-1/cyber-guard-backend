@@ -5,6 +5,7 @@ ThreatListCreateView,
 ThreatDetailView,
 ThreatAnalyzeView,
 ThreatDeleteView,
+MalwareAnalyzeView,
 )
 
 urlpatterns = [
@@ -20,6 +21,12 @@ path(
     "analyze/",
     ThreatAnalyzeView.as_view(),
     name="threat-analyze",
+),
+
+path(
+    "malware/analyze/",
+    MalwareAnalyzeView.as_view(),
+    name="malware-analyze",
 ),
 
 path(
