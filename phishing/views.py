@@ -608,8 +608,13 @@ class URLAnalysisView(APIView):
             "model_results": {
                 "trained_url_model": trained,
                 "url_security_engine": {
+                    "original_url": features.get("original_url", candidate_url),
+                    "final_url": features.get("final_url", candidate_url),
+                    "original_domain": features.get("original_domain", parsed_url.hostname or ""),
+                    "final_domain": features.get("final_domain", ""),
                     "redirect_analysis": redirect,
                     "google_safe_browsing": google,
+                    "url_intelligence": features.get("url_intelligence", {}),
                 },
             },
             "recommendation": result.get("recommendation", ""),
