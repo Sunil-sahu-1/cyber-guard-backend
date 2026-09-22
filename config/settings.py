@@ -234,6 +234,9 @@ DATABASES = {
         "PASSWORD": POSTGRES_PASSWORD,
         "HOST": POSTGRES_HOST,
         "PORT": POSTGRES_PORT,
+        "OPTIONS": {
+            "sslmode": os.getenv("POSTGRES_SSLMODE", "prefer").strip(),
+        },
         "CONN_MAX_AGE": int(
             os.getenv("DB_CONN_MAX_AGE", "60")
         ),
