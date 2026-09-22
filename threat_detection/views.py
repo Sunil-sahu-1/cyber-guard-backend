@@ -754,6 +754,168 @@ def _run_detection_engines(
 # MALWARE FILE ANALYSIS API
 # ============================================================================
 
+def _lookup_public_ip(ip_value: str) -> dict:
+    """Return normalized public IP intelligence without exposing provider-specific UI."""
+
+    ip_obj = ipaddress.ip_address(ip_value)
+
+    if ip_obj.version != 4:
+        raise ValueError("Self Protection currently accepts IPv4 for lookup.")
+
+    if (
+        ip_obj.is_private
+        or ip_obj.is_loopback
+        or ip_obj.is_reserved
+        or ip_obj.is_multicast
+        or ip_obj.is_unspecified
+    ):
+        raise ValueError(
+            "Enter a public IPv4 address. Private/local IPv4 addresses cannot be geolocated publicly."
+        )
+
+    response = requests.get(
+        f"https://ipwho.is/{ip_obj}",
+        timeout=8,
+        headers={
+            "User-Agent": "CyberGuard-SelfProtection/1.0",
+        },
+    )
+    response.raise_for_status()
+
+    data = response.json()
+
+    if not data.get("success", False):
+        raise ValueError(
+            str(data.get("message", "IP lookup failed."))
+        )
+
+    connection = data.get("connection") or {}
+    timezone = data.get("timezone") or {}
+    flag = data.get("flag") or {}
+
+    reverse_dns = None
+
+    try:
+        reverse_dns = socket.gethostbyaddr(
+            str(ip_obj)
+        )[0]
+    except (socket.herror, socket.gaierror, OSError):
+        reverse_dns = None
+
+    return {
+        "ip": data.get("ip", str(ip_obj)),
+        "version": data.get("type", "IPv4"),
+        "is_public": True,
+        "continent": data.get("continent"),
+        "continent_code": data.get("continent_code"),
+        "country": data.get("country"),
+        "country_code": data.get("country_code"),
+        "region": data.get("region"),
+        "region_code": data.get("region_code"),
+        "city": data.get("city"),
+        "postal": data.get("postal"),
+        "capital": data.get("capital"),
+        "calling_code": data.get("calling_code"),
+        "latitude": data.get("latitude"),
+        "longitude": data.get("longitude"),
+        "is_eu": data.get("is_eu"),
+        "borders": data.get("borders"),
+        "flag": flag,
+        "connection": {
+            "asn": connection.get("asn"),
+            "organization": connection.get("org"),
+            "isp": connection.get("isp"),
+            "domain": connection.get("domain"),
+        },
+        "timezone": {
+            "id": timezone.get("id"),
+            "abbr": timezone.get("abbr"),
+            "is_dst": timezone.get("is_dst"),
+            "offset": timezone.get("offset"),
+            "utc": timezone.get("utc"),
+            "current_time": timezone.get("current_time"),
+        },
+        "public_exposure": {
+            "reverse_dns": reverse_dns,
+            "network_domain": connection.get("domain"),
+            "asn": connection.get("asn"),
+            "organization": connection.get("org"),
+            "isp": connection.get("isp"),
+            "note": (
+                "Reverse DNS and network ownership are public-network "
+                "indicators. They do not represent a complete list of "
+                "every website that may use this IP."
+            ),
+        },
+        "source": "Public IP intelligence lookup",
+    }
+
+
+class SelfProtectionIPLookupView(APIView):
+
+    permission_classes = [
+        IsAuthenticated
+    ]
+
+    def post(
+        self,
+        request,
+    ):
+        raw_ipv4 = str(
+            request.data.get(
+                "ipv4",
+                "",
+            )
+        ).strip()
+
+        if not raw_ipv4:
+            return Response(
+                {
+                    "detail": "ipv4 is required."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            lookup = _lookup_public_ip(
+                raw_ipv4
+            )
+        except ValueError as exc:
+            return Response(
+                {
+                    "detail": str(exc)
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except requests.RequestException as exc:
+            return Response(
+                {
+                    "detail": (
+                        "IP intelligence service is temporarily unavailable."
+                    ),
+                    "provider_error": str(exc),
+                },
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        return Response(
+            {
+                "message": "IPv4 self-protection lookup completed.",
+                "lookup": lookup,
+                "ipv6_policy": {
+                    "editable": False,
+                    "mode": "device_observed",
+                    "description": (
+                        "IPv6 is displayed from the current device/network "
+                        "when available. A real IPv6 address cannot be "
+                        "mathematically derived from an arbitrary IPv4 address."
+                    ),
+                },
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
 class MalwareAnalyzeView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
