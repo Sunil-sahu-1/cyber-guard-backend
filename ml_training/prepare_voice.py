@@ -1,11 +1,11 @@
 """Prepare a small local voice deepfake dataset for Cyber Guard.
 
-Downloads examples through Hugging Face streaming, keeps 250 bona-fide and
-250 spoof examples, trims each clip to at most 5 seconds, writes 16 kHz mono
-WAV files, and creates datasets/voice/voice_manifest.csv.
+Streams MLAAD-tiny, keeps 250 bona-fide and 250 spoof examples, trims each
+clip to at most 5 seconds, writes 16 kHz mono WAV files, and creates
+datasets/voice/voice_manifest.csv.
 
-The source dataset is not committed to GitHub. Only the prepared local files
-are used by the lightweight voice training script.
+The MLAAD-tiny soundfolder does not expose a "label" column in the streamed
+rows, so this script detects the class from available metadata/path fields.
 """
 
 from __future__ import annotations
@@ -28,6 +28,43 @@ MAX_SECONDS = 5
 TARGET_SR = 16_000
 
 
+def detect_label(item: dict) -> int | None:
+    """Return 0 for bona-fide/real and 1 for spoof/fake, if detectable."""
+    # Some dataset variants expose an explicit class-like field.
+    for key in ("label", "class", "category", "target", "type"):
+        if key in item:
+            value = item[key]
+            if isinstance(value, (int, np.integer)):
+                if int(value) in (0, 1):
+                    return int(value)
+            text = str(value).strip().lower()
+            if text in {"0", "bonafide", "bona-fide", "real", "human"}:
+                return 0
+            if text in {"1", "spoof", "fake", "synthetic", "ai"}:
+                return 1
+
+    # MLAAD-tiny is a soundfolder dataset; class information is represented
+    # by the source path/folder rather than a label column.
+    audio = item.get("audio")
+    candidates = []
+    if isinstance(audio, dict):
+        candidates.extend(
+            [audio.get("path"), audio.get("filename"), audio.get("name")]
+        )
+
+    for key in ("path", "file", "filename", "file_name", "name"):
+        if key in item:
+            candidates.append(item[key])
+
+    haystack = " ".join(str(x) for x in candidates if x).lower()
+    if any(token in haystack for token in ("bona-fide", "bonafide", "bona_fide")):
+        return 0
+    if any(token in haystack for token in ("spoof", "fake", "synthetic")):
+        return 1
+
+    return None
+
+
 def main() -> None:
     REAL.mkdir(parents=True, exist_ok=True)
     FAKE.mkdir(parents=True, exist_ok=True)
@@ -42,25 +79,34 @@ def main() -> None:
     print("[voice] clip length: <= 5 seconds, 16 kHz mono")
 
     for item in ds:
-        label = int(item["label"])
+        label = detect_label(item)
 
+        if label is None:
+            continue
         if label == 0 and real_count >= PER_CLASS:
             continue
         if label == 1 and fake_count >= PER_CLASS:
             continue
-        if label not in (0, 1):
+
+        audio_obj = item.get("audio")
+        if not isinstance(audio_obj, dict):
             continue
 
-        audio = np.asarray(item["audio"]["array"], dtype=np.float32)
-        sample_rate = int(item["audio"]["sampling_rate"])
+        audio = np.asarray(audio_obj["array"], dtype=np.float32)
+        sample_rate = int(audio_obj["sampling_rate"])
 
         if audio.ndim > 1:
-            audio = np.mean(audio, axis=1)
+            # Handle either (samples, channels) or (channels, samples).
+            if audio.shape[0] < audio.shape[1]:
+                audio = np.mean(audio, axis=0)
+            else:
+                audio = np.mean(audio, axis=1)
 
-        # Resample only when necessary. librosa is already a project dependency.
         if sample_rate != TARGET_SR:
             import librosa
-            audio = librosa.resample(audio, orig_sr=sample_rate, target_sr=TARGET_SR)
+            audio = librosa.resample(
+                audio, orig_sr=sample_rate, target_sr=TARGET_SR
+            )
             sample_rate = TARGET_SR
 
         audio = audio[: TARGET_SR * MAX_SECONDS]
