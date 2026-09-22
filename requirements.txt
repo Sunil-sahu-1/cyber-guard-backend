@@ -63,6 +63,10 @@ imageio-ffmpeg>=0.6,<1.0
 
 
 # ------------------------------------------------------------
+ # Malware / Tabular Models
+lightgbm>=4.5,<5.0
+git+https://github.com/elastic/ember.git
+
 # Voice Dataset Preparation
 # ------------------------------------------------------------
 datasets>=4.0,<5.0
