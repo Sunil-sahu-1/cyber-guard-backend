@@ -68,7 +68,7 @@ class DeepfakeClassifier(nn.Module):
 
         self.model = timm.create_model(
             architecture,
-            pretrained=True,
+            pretrained=False,
             num_classes=2,
         )
 
@@ -87,6 +87,7 @@ def _load_checkpoint(
     checkpoint = torch.load(
         checkpoint_path,
         map_location=DEVICE,
+        weights_only=False,
     )
 
     if isinstance(checkpoint, dict):
