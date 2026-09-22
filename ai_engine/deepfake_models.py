@@ -45,7 +45,7 @@ MODEL_DIR = Path(__file__).resolve().parents[1] / "trained_models"
 # Untrained ImageNet backbones are not presented as deepfake detectors.
 MODEL_CONFIGS = {
     "efficientnet_b0_trained": {
-        "architecture": "tf_efficientnet_b0",
+        "architecture": "efficientnet_b0",
         "checkpoint": MODEL_DIR / "deepfake_image_efficientnet_b0.pth",
         "classes": ["fake", "real"],
     },
