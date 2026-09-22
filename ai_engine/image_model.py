@@ -358,20 +358,12 @@ def analyze_image_file(
 
     if score >= 60:
         indicators.append(
-            "Multiple AI models indicate elevated manipulation probability."
+            "The trained EfficientNet-B0 deepfake model detected elevated fake-image probability."
         )
 
     if score >= 80:
         indicators.append(
-            "Ensemble prediction strongly indicates possible deepfake manipulation."
-        )
-
-    if not model_result[
-        "is_fine_tuned"
-    ]:
-        indicators.append(
-            "Models are using pretrained backbone weights; "
-            "deepfake-specific fine-tuning is still required."
+            "The trained deepfake model strongly indicates possible manipulation."
         )
 
     return {
