@@ -39,7 +39,10 @@ MODEL_WEIGHTS = {
     "DEEPFAKE_ENGINE": 1.40,
     "IDENTITY_ENGINE": 1.30,
     "NETWORK_ENGINE": 1.30,
-    "MALWARE_ENGINE": 1.40,
+    "MALWARE_ENGINE": 1.50,
+    "EMBER_MALWARE_ENGINE": 1.60,
+    "PHISHING_URL_ML_ENGINE": 1.30,
+    "PHISHING_EMAIL_ML_ENGINE": 1.25,
     "VOICE_ENGINE": 1.40,
 }
 
@@ -403,6 +406,9 @@ def _humanize_model_name(
         "IDENTITY_ENGINE": "identity analysis",
         "NETWORK_ENGINE": "network analysis",
         "MALWARE_ENGINE": "malware analysis",
+        "EMBER_MALWARE_ENGINE": "EMBER malware model",
+        "PHISHING_URL_ML_ENGINE": "trained URL phishing model",
+        "PHISHING_EMAIL_ML_ENGINE": "trained email phishing model",
         "VOICE_ENGINE": "voice anti-spoofing analysis",
     }
 
