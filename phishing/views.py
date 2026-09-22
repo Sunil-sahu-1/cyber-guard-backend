@@ -1,17 +1,26 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 from urllib.parse import urlparse
 
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
+from django.core.files.uploadedfile import UploadedFile
 from django.db import transaction
 
 from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
+from PIL import Image
+
+try:
+    import pytesseract
+except ImportError:
+    pytesseract = None
 
 from accounts.utils import get_client_ip
 from audit_logs.models import AuditLog
@@ -633,6 +642,219 @@ class URLAnalysisView(APIView):
             }
 
         return Response(response_data, status=status.HTTP_201_CREATED)
+
+
+def _extract_email_fields_from_ocr(
+    text: str,
+) -> dict[str, str]:
+    """Extract likely sender/subject/body fields from OCR text."""
+
+    lines = [
+        re.sub(r"\\s+", " ", line).strip()
+        for line in text.splitlines()
+        if line.strip()
+    ]
+
+    sender = ""
+    subject = ""
+    body_lines: list[str] = []
+
+    sender_patterns = [
+        re.compile(
+            r"^(?:from|sender|mail|email)\\s*[:\\-]\\s*(.+)$",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"^(.+@[^\\s<>]+)$",
+            re.IGNORECASE,
+        ),
+    ]
+
+    subject_pattern = re.compile(
+        r"^(?:subject|sub)\\s*[:\\-]\\s*(.+)$",
+        re.IGNORECASE,
+    )
+
+    consumed_indexes: set[int] = set()
+
+    for index, line in enumerate(lines):
+        subject_match = subject_pattern.match(line)
+
+        if subject_match and not subject:
+            subject = subject_match.group(1).strip()
+            consumed_indexes.add(index)
+            continue
+
+        for pattern in sender_patterns:
+            match = pattern.match(line)
+
+            if match:
+                candidate = match.group(1).strip().strip("<>")
+
+                try:
+                    validate_email(candidate)
+                except ValidationError:
+                    continue
+
+                if not sender:
+                    sender = candidate
+                    consumed_indexes.add(index)
+                break
+
+    # If the screenshot has no explicit From line, use the first OCR email.
+    if not sender:
+        email_matches = re.findall(
+            r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if email_matches:
+            sender = email_matches[0].strip()
+
+    # Remove obvious header lines from the body. Preserve the rest of the
+    # OCR text exactly enough for the downstream classifier.
+    for index, line in enumerate(lines):
+        if index in consumed_indexes:
+            continue
+
+        if re.match(
+            r"^(?:from|sender|mail|email|subject|sub)\\s*[:\\-]",
+            line,
+            re.IGNORECASE,
+        ):
+            continue
+
+        body_lines.append(line)
+
+    return {
+        "sender": sender,
+        "subject": subject,
+        "body": "\\n".join(body_lines).strip(),
+    }
+
+
+class EmailScreenshotOCRView(APIView):
+
+    permission_classes = [
+        IsAuthenticated
+    ]
+
+    def post(
+        self,
+        request,
+    ):
+        if pytesseract is None:
+            return Response(
+                {
+                    "detail": (
+                        "OCR is not installed. Install the pytesseract "
+                        "Python package and the Tesseract OCR engine."
+                    )
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        uploaded: UploadedFile | None = request.FILES.get(
+            "screenshot"
+        )
+
+        if uploaded is None:
+            return Response(
+                {
+                    "detail": "screenshot image is required."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        allowed_types = {
+            "image/png",
+            "image/jpeg",
+            "image/webp",
+            "image/bmp",
+        }
+
+        if uploaded.content_type not in allowed_types:
+            return Response(
+                {
+                    "detail": (
+                        "Only PNG, JPEG, WEBP and BMP screenshots "
+                        "are supported."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        max_size = 10 * 1024 * 1024
+
+        if uploaded.size > max_size:
+            return Response(
+                {
+                    "detail": "Screenshot is too large. Maximum size is 10 MB."
+                },
+                status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            )
+
+        try:
+            image = Image.open(uploaded)
+            image.verify()
+            uploaded.seek(0)
+            image = Image.open(uploaded).convert("RGB")
+
+            # OCR the complete screenshot, not only a cropped region.
+            raw_text = pytesseract.image_to_string(
+                image,
+                config="--psm 6",
+            ).strip()
+        except Exception as exc:
+            return Response(
+                {
+                    "detail": f"Could not read screenshot with OCR: {exc}"
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not raw_text:
+            return Response(
+                {
+                    "detail": (
+                        "No readable text was detected. Use a clear screenshot "
+                        "with the complete email visible."
+                    )
+                },
+                status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+
+        fields = _extract_email_fields_from_ocr(
+            raw_text
+        )
+
+        email_text = "\n".join(
+            part
+            for part in [
+                f"From: {fields['sender']}" if fields["sender"] else "",
+                f"Subject: {fields['subject']}" if fields["subject"] else "",
+                fields["body"],
+            ]
+            if part
+        )
+
+        analysis = analyze_email(
+            email_text
+        )
+
+        return Response(
+            {
+                "message": "Screenshot OCR completed.",
+                "ocr": {
+                    "raw_text": raw_text,
+                    "text_length": len(raw_text),
+                    "engine": "Tesseract OCR",
+                },
+                "extracted": fields,
+                "analysis": analysis,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class EmailAnalysisView(APIView):
