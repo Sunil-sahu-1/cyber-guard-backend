@@ -129,20 +129,13 @@ def _prediction(
 def _confidence(
     score: float,
 ) -> float:
-
-    if score >= 80:
-        return 0.90
-
-    if score >= 60:
-        return 0.82
-
-    if score >= 40:
-        return 0.72
-
-    if score >= 20:
-        return 0.62
-
-    return 0.55
+    # This is a probability-derived confidence proxy, not a calibrated
+    # confidence measurement. A score near 50 means the classifier is
+    # uncertain between the two classes.
+    return round(
+        max(score, 100.0 - score) / 100.0,
+        4,
+    )
 
 
 def _model_score(
