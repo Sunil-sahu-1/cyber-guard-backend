@@ -16,8 +16,7 @@ from rest_framework.views import APIView
 from accounts.utils import get_client_ip
 from audit_logs.models import AuditLog
 
-from ai_engine.nlp_model import analyze_email
-from ai_engine.phishing_model import analyze_url
+from ai_engine.trained_classifiers import analyze_phishing_email_ml, analyze_phishing_url_ml
 from ai_engine.risk_engine import analyze_risk
 
 from incidents.models import (
@@ -605,9 +604,7 @@ class URLAnalysisView(APIView):
         # AI URL analysis
         # -------------------------------------------------
 
-        result = analyze_url(
-            url
-        )
+        result = analyze_phishing_url_ml(url) or {}
 
         if not isinstance(
             result,
@@ -638,14 +635,7 @@ class URLAnalysisView(APIView):
             ),
         )
 
-        risk = analyze_risk(
-            {
-                "URL_PHISHING_ENGINE":
-                    _safe_float(
-                        raw_score
-                    )
-            }
-        )
+        risk = analyze_risk({"PHISHING_URL_ML_ENGINE": _safe_float(raw_score)})
 
         threat = _create_threat(
             user=request.user,
@@ -662,7 +652,7 @@ class URLAnalysisView(APIView):
 
         _save_analysis_records(
             threat=threat,
-            model_name="URL_PHISHING_ENGINE",
+            model_name="PHISHING_URL_ML_ENGINE",
             result=result,
         )
 
@@ -917,9 +907,7 @@ class EmailAnalysisView(APIView):
             if part
         )
 
-        result = analyze_email(
-            email_text
-        )
+        result = analyze_phishing_email_ml(email_text) or {}
 
         if not isinstance(
             result,
@@ -935,14 +923,7 @@ class EmailAnalysisView(APIView):
             ),
         )
 
-        risk = analyze_risk(
-            {
-                "EMAIL_NLP_ENGINE":
-                    _safe_float(
-                        raw_score
-                    )
-            }
-        )
+        risk = analyze_risk({"PHISHING_EMAIL_ML_ENGINE": _safe_float(raw_score)})
 
         threat = _create_threat(
             user=request.user,
@@ -955,7 +936,7 @@ class EmailAnalysisView(APIView):
 
         _save_analysis_records(
             threat=threat,
-            model_name="EMAIL_NLP_ENGINE",
+            model_name="PHISHING_EMAIL_ML_ENGINE",
             result=result,
         )
 
