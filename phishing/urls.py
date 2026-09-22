@@ -6,6 +6,7 @@ from .views import (
     PhishingScanDeleteView,
     URLAnalysisView,
     EmailAnalysisView,
+    EmailScreenshotOCRView,
 )
 
 
@@ -20,6 +21,12 @@ urlpatterns = [
         "email/analyze/",
         EmailAnalysisView.as_view(),
         name="email-analyze",
+    ),
+
+    path(
+        "email/ocr/",
+        EmailScreenshotOCRView.as_view(),
+        name="email-screenshot-ocr",
     ),
 
     path(
