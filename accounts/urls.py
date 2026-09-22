@@ -7,6 +7,7 @@ from .views import (
     LogoutView,
     PasswordResetRequestView,
     PasswordResetConfirmView,
+    SecureTokenRefreshView,
 )
 
 
