@@ -1,4 +1,6 @@
 import json
+import os
+import tempfile
 from typing import Any
 
 from django.db import transaction
@@ -6,6 +8,7 @@ from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.parsers import MultiPartParser, FormParser
 
 from accounts.utils import get_client_ip
 from audit_logs.models import AuditLog
@@ -17,6 +20,7 @@ from ai_engine.anomaly_model import (
 from ai_engine.correlation_engine import (
     correlate_threat_signals,
 )
+from ai_engine.malware_model import analyze_malware_file
 from ai_engine.nlp_model import (
     analyze_email,
     analyze_message,
@@ -733,6 +737,68 @@ def _run_detection_engines(
     return results
 
 
+# ============================================================================
+# MALWARE FILE ANALYSIS API
+# ============================================================================
+
+class MalwareAnalyzeView(APIView):
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    @transaction.atomic
+    def post(self, request):
+        uploaded = request.FILES.get("file")
+        if uploaded is None:
+            return Response({"detail": "file is required."}, status=status.HTTP_400_BAD_REQUEST)
+        if uploaded.size <= 0:
+            return Response({"detail": "Uploaded file is empty."}, status=status.HTTP_400_BAD_REQUEST)
+
+        suffix = os.path.splitext(uploaded.name)[1].lower()
+        temp_path = None
+        try:
+            temp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+            temp_path = temp.name
+            for chunk in uploaded.chunks():
+                temp.write(chunk)
+            temp.close()
+            result = analyze_malware_file(temp_path, uploaded.name, uploaded.size)
+            if not result.get("is_valid"):
+                return Response(result, status=status.HTTP_400_BAD_REQUEST)
+
+            score = _safe_float(result.get("risk_score", 0))
+            severity = str(result.get("severity", "SAFE")).upper()
+            threat = Threat.objects.create(
+                user=request.user,
+                threat_type="MALICIOUS_FILE",
+                source_type="FILE",
+                input_data=json.dumps({
+                    "file_name": uploaded.name,
+                    "file_size": uploaded.size,
+                    "prediction": result.get("prediction"),
+                    "model": result.get("features", {}).get("model"),
+                }, ensure_ascii=False),
+                risk_score=score,
+                severity=severity if severity in dict(Threat.SEVERITY_CHOICES) else "SAFE",
+                status="DETECTED",
+                explanation=str(result.get("recommendation", "EMBER malware analysis completed.")),
+            )
+            _save_model_result(threat, "EMBER_MALWARE_ENGINE", result)
+            incident = _create_incident(threat, ["Quarantine suspicious content", "Alert administrator"] if score >= 60 else [])
+            return Response({
+                **result,
+                "threat_id": threat.id,
+                "incident": ({
+                    "id": incident.id,
+                    "severity": incident.severity,
+                    "status": incident.status,
+                } if incident else None),
+            }, status=status.HTTP_200_OK)
+        finally:
+            if temp_path:
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
 # ============================================================================
 # INCIDENT CREATION
 # ============================================================================
