@@ -21,6 +21,7 @@ from ai_engine.correlation_engine import (
     correlate_threat_signals,
 )
 from ai_engine.malware_model import analyze_malware_file
+from ai_engine.trained_classifiers import analyze_phishing_email_ml, analyze_phishing_url_ml
 from ai_engine.nlp_model import (
     analyze_email,
     analyze_message,
@@ -545,6 +546,10 @@ def _run_detection_engines(
             )
         )
 
+        ml_result = analyze_phishing_url_ml(text_input)
+        if ml_result is not None:
+            results.append(("PHISHING_URL_ML_ENGINE", ml_result))
+
         return results
 
     # ----------------------------------------------------------------------
@@ -563,6 +568,10 @@ def _run_detection_engines(
                 result,
             )
         )
+
+        ml_result = analyze_phishing_email_ml(text_input)
+        if ml_result is not None:
+            results.append(("PHISHING_EMAIL_ML_ENGINE", ml_result))
 
         return results
 
