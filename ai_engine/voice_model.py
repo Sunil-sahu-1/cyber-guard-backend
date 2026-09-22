@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 import subprocess
 
+import joblib
 import numpy as np
 
 
@@ -486,6 +487,49 @@ def _confidence(score: float, features: dict[str, Any]) -> float:
     )
 
 
+def _trained_model_features(file_path: str) -> np.ndarray:
+    """Extract exactly the feature vector used by train_voice_small.py."""
+    import librosa
+
+    y, sr = librosa.load(file_path, sr=16_000, mono=True, duration=8.0)
+    if len(y) < sr:
+        y = np.pad(y, (0, sr - len(y)))
+    mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=20)
+    delta = librosa.feature.delta(mfcc)
+    arrays = [mfcc, delta, librosa.feature.rms(y=y), librosa.feature.zero_crossing_rate(y),
+              librosa.feature.spectral_centroid(y=y, sr=sr), librosa.feature.spectral_bandwidth(y=y, sr=sr),
+              librosa.feature.spectral_rolloff(y=y, sr=sr), librosa.feature.spectral_flatness(y=y)]
+    f0 = librosa.yin(y, fmin=70, fmax=400, sr=sr, frame_length=1024)
+    f0 = f0[np.isfinite(f0)]
+    out = []
+    for array in arrays:
+        values = np.asarray(array, dtype=np.float32).ravel()
+        out += [float(np.mean(values)), float(np.std(values)), float(np.min(values)), float(np.max(values))]
+    values = f0 if len(f0) else np.array([0.0])
+    out += [float(np.mean(values)), float(np.std(values)), float(np.min(values)), float(np.max(values))]
+    return np.nan_to_num(np.asarray(out, dtype=np.float32)).reshape(1, -1)
+
+def _trained_voice_result(file_path: str) -> dict[str, Any] | None:
+    model_path = Path(__file__).resolve().parents[1] / "trained_models" / "voice_synthetic_rf.joblib"
+    if not model_path.exists():
+        return None
+    try:
+        model = joblib.load(model_path)
+        probability = float(model.predict_proba(_trained_model_features(file_path))[0][1])
+        score = _clamp(probability * 100.0)
+        prediction = "AI_GENERATED_VOICE" if probability >= 0.5 else "LIKELY_HUMAN_VOICE"
+        severity = _severity(score)
+        confidence = _clamp(max(probability, 1.0 - probability) * 100.0)
+        return {"analysis_type": "voice_synthetic_rf_trained", "is_valid": True,
+                "risk_score": score, "severity": severity, "prediction": prediction,
+                "confidence": confidence,
+                "indicators": [f"Trained Random Forest spoof probability: {score:.2f}%.",
+                               "Prediction uses the Cyber Guard voice model trained on 500 balanced samples."],
+                "features": {"trained_model": "voice_synthetic_rf.joblib", "spoof_probability": round(probability, 4)},
+                "recommendation": "Verify the speaker through an independent channel before trusting a high-risk result." if score >= 60 else "No strong spoof evidence was detected; this does not prove human origin."}
+    except Exception:
+        return None
+
 def analyze_voice_file(
     file_path: str,
     file_name: str,
@@ -528,6 +572,10 @@ def analyze_voice_file(
             "severity": "SAFE",
             "error": "Unsupported audio format.",
         }
+
+    trained_result = _trained_voice_result(file_path)
+    if trained_result is not None:
+        return trained_result
 
     try:
         audio, sample_rate = _load_audio(file_path)
