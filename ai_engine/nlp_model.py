@@ -791,6 +791,7 @@ def _build_simple_explanation(
     request_keywords: list[str],
     contains_otp_request: bool,
     suspicious_attachments: list[str],
+    spam: dict[str, Any] | None = None,
 ) -> str:
     """
     Generate a short, user-friendly explanation.
@@ -798,6 +799,9 @@ def _build_simple_explanation(
     This intentionally avoids exposing the internal scoring/rule details
     to the end user.
     """
+
+    if spam is None:
+        spam = {}
 
     # ------------------------------------------------------------------
     # PHISHING
@@ -878,6 +882,34 @@ def _build_simple_explanation(
         return (
             "This message contains promotional or event content "
             "with some suspicious signs. Verify the sender before taking action."
+        )
+
+    # ------------------------------------------------------------------
+    # SPAM
+    # ------------------------------------------------------------------
+
+    if prediction == "SPAM":
+        reasons = []
+
+        if spam.get("keywords"):
+            reasons.append("contains common spam phrases")
+
+        if url_analysis["count"] >= 4:
+            reasons.append("contains many links")
+
+        if suspicious_attachments:
+            reasons.append("contains potentially risky attachment names")
+
+        if reasons:
+            return (
+                "This message shows common spam patterns because it "
+                + ", ".join(reasons)
+                + ". Avoid clicking links or downloading unexpected files."
+            )
+
+        return (
+            "This message shows common unsolicited-message patterns. "
+            "Treat unexpected links and offers carefully."
         )
 
     # ------------------------------------------------------------------
@@ -1489,6 +1521,7 @@ def analyze_text(
         request_keywords=request_keywords,
         contains_otp_request=contains_otp_request,
         suspicious_attachments=suspicious_attachments,
+        spam=spam,
     )
 
     # =========================================================================
