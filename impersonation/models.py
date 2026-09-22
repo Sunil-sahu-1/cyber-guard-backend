@@ -1,6 +1,8 @@
 from django.conf import settings
 from django.db import models
 
+from security.fields import EncryptedJSONField, EncryptedTextField
+
 
 class ImpersonationScan(models.Model):
 
@@ -55,7 +57,7 @@ class ImpersonationScan(models.Model):
         default="SAFE",
     )
 
-    explanation = models.TextField(
+    explanation = EncryptedTextField(
         blank=True,
     )
 
@@ -117,7 +119,7 @@ class DeepfakeAnalysis(models.Model):
         default=False,
     )
 
-    analysis_details = models.JSONField(
+    analysis_details = EncryptedJSONField(
         default=dict,
         blank=True,
     )
@@ -157,12 +159,12 @@ class IdentityAnalysis(models.Model):
         default=False,
     )
 
-    impersonation_indicators = models.JSONField(
+    impersonation_indicators = EncryptedJSONField(
         default=list,
         blank=True,
     )
 
-    analysis_details = models.JSONField(
+    analysis_details = EncryptedJSONField(
         default=dict,
         blank=True,
     )
@@ -242,8 +244,8 @@ class VoiceAnalysis(models.Model):
     synthetic_voice_indicator = models.BooleanField(default=False)
     replay_indicator = models.BooleanField(default=False)
 
-    signal_components = models.JSONField(default=dict, blank=True)
-    analysis_details = models.JSONField(default=dict, blank=True)
+    signal_components = EncryptedJSONField(default=dict, blank=True)
+    analysis_details = EncryptedJSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
