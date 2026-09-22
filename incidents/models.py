@@ -1,6 +1,8 @@
 from django.conf import settings
 from django.db import models
 
+from security.fields import EncryptedTextField
+
 
 class Incident(models.Model):
 
@@ -27,7 +29,7 @@ class Incident(models.Model):
         max_length=255
     )
 
-    description = models.TextField(
+    description = EncryptedTextField(
         blank=True
     )
 
@@ -105,7 +107,7 @@ class IncidentEvidence(models.Model):
         max_length=100
     )
 
-    evidence_value = models.TextField(
+    evidence_value = EncryptedTextField(
         blank=True
     )
 
@@ -157,7 +159,7 @@ class ResponseAction(models.Model):
         choices=ACTION_CHOICES
     )
 
-    description = models.TextField(
+    description = EncryptedTextField(
         blank=True
     )
 
