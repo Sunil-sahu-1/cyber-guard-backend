@@ -141,6 +141,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    "security.middleware.APISecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -339,7 +340,9 @@ REST_FRAMEWORK = {
     ),
     "DEFAULT_RENDERER_CLASSES": (
         "rest_framework.renderers.JSONRenderer",
-        "rest_framework.renderers.BrowsableAPIRenderer",
+        *((
+            "rest_framework.renderers.BrowsableAPIRenderer",
+        ) if DEBUG else ()),
     ),
     "DEFAULT_THROTTLE_CLASSES": (
         "rest_framework.throttling.AnonRateThrottle",
@@ -348,6 +351,11 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "anon": "60/hour",
         "user": "600/hour",
+        "login": "10/minute",
+        "register": "5/hour",
+        "password_reset": "5/hour",
+        "password_reset_confirm": "10/hour",
+        "token_refresh": "30/minute",
     },
 }
 
