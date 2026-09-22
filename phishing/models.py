@@ -1,6 +1,8 @@
 from django.conf import settings
 from django.db import models
 
+from security.fields import EncryptedJSONField, EncryptedTextField
+
 
 class PhishingScan(models.Model):
 
@@ -35,7 +37,7 @@ class PhishingScan(models.Model):
         choices=SCAN_TYPE_CHOICES,
     )
 
-    input_data = models.TextField()
+    input_data = EncryptedTextField()
 
     risk_score = models.FloatField(
         default=0,
@@ -47,7 +49,7 @@ class PhishingScan(models.Model):
         default="SAFE",
     )
 
-    explanation = models.TextField(
+    explanation = EncryptedTextField(
         blank=True,
     )
 
@@ -110,7 +112,7 @@ class URLAnalysis(models.Model):
         default=0,
     )
 
-    analysis_details = models.JSONField(
+    analysis_details = EncryptedJSONField(
         default=dict,
         blank=True,
     )
@@ -156,7 +158,7 @@ class EmailAnalysis(models.Model):
         default=False,
     )
 
-    analysis_details = models.JSONField(
+    analysis_details = EncryptedJSONField(
         default=dict,
         blank=True,
     )

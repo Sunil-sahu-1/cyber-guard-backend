@@ -341,6 +341,18 @@ def _create_threat(
             "features",
             {},
         ),
+        "face_detection": ai_result.get(
+            "face_detection",
+            {},
+        ),
+        "visual_artifacts": ai_result.get(
+            "visual_artifacts",
+            {},
+        ),
+        "metadata": ai_result.get(
+            "metadata",
+            {},
+        ),
     }
 
     return Threat.objects.create(
@@ -767,7 +779,7 @@ def _run_media_analysis(
                 # when strict forensic validation is enabled.
                 result = {
                     "analysis_type": (
-                        "advanced_deepfake_image"
+                        "trained_efficientnet_b0_deepfake_image"
                     ),
                     "is_valid": True,
                     "risk_score": 0.0,
@@ -799,7 +811,7 @@ def _run_media_analysis(
             ):
                 result = {
                     "analysis_type": (
-                        "advanced_deepfake_image"
+                        "trained_efficientnet_b0_deepfake_image"
                     ),
                     "is_valid": True,
                     "risk_score": 0.0,

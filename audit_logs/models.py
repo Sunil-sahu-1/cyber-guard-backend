@@ -1,6 +1,8 @@
 from django.conf import settings
 from django.db import models
 
+from security.fields import EncryptedTextField
+
 
 class AuditLog(models.Model):
 
@@ -61,7 +63,7 @@ class AuditLog(models.Model):
         blank=True,
     )
 
-    user_agent = models.TextField(
+    user_agent = EncryptedTextField(
         blank=True,
     )
 
@@ -75,7 +77,7 @@ class AuditLog(models.Model):
         blank=True,
     )
 
-    description = models.TextField(
+    description = EncryptedTextField(
         blank=True,
     )
 

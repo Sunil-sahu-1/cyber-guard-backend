@@ -17,6 +17,7 @@ from accounts.utils import get_client_ip
 from audit_logs.models import AuditLog
 
 from ai_engine.trained_classifiers import analyze_phishing_email_ml, analyze_phishing_url_ml
+from ai_engine.url_security import analyze_url_security
 from ai_engine.risk_engine import analyze_risk
 
 from incidents.models import (
@@ -503,149 +504,40 @@ class URLAnalysisView(APIView):
         self,
         request,
     ):
+        url = request.data.get("url")
 
-        url = request.data.get(
-            "url"
-        )
-
-        if not url:
+        if not isinstance(url, str) or not url.strip():
             return Response(
-                {
-                    "detail": (
-                        "url is required."
-                    )
-                },
+                {"detail": "url is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if not isinstance(
-            url,
-            str,
-        ):
-            return Response(
-                {
-                    "detail": (
-                        "url must be a string."
-                    )
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        url = url.strip()
-
-        if not url:
-            return Response(
-                {
-                    "detail": (
-                        "url cannot be empty."
-                    )
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # -------------------------------------------------
-        # Strict basic URL validation.
-        # -------------------------------------------------
-
-        candidate_url = url
-
-        if "://" not in candidate_url:
-            candidate_url = (
-                f"https://{candidate_url}"
-            )
+        original_url = url.strip()
+        candidate_url = original_url if "://" in original_url else f"https://{original_url}"
 
         try:
-            parsed_url = urlparse(
-                candidate_url
-            )
+            parsed_url = urlparse(candidate_url)
         except ValueError:
+            return Response({"detail": "Invalid URL."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if parsed_url.scheme.lower() not in {"http", "https"} or not parsed_url.hostname:
+            return Response({"detail": "Invalid URL."}, status=status.HTTP_400_BAD_REQUEST)
+
+        result = analyze_url_security(candidate_url)
+
+        if result.get("is_valid") is False:
             return Response(
-                {
-                    "detail": "Invalid URL."
-                },
+                {"detail": result.get("error", "Invalid URL.")},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        hostname = parsed_url.hostname
-
-        if (
-            parsed_url.scheme.lower()
-            not in {
-                "http",
-                "https",
-            }
-            or not hostname
-        ):
-            return Response(
-                {
-                    "detail": "Invalid URL."
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        hostname = hostname.strip().lower()
-
-        # Reject values such as:
-        # not-a-valid-url
-        if (
-            "." not in hostname
-            and hostname not in {
-                "localhost",
-            }
-        ):
-            return Response(
-                {
-                    "detail": "Invalid URL."
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # -------------------------------------------------
-        # AI URL analysis
-        # -------------------------------------------------
-
-        result = analyze_phishing_url_ml(url) or {}
-
-        if not isinstance(
-            result,
-            dict,
-        ):
-            result = {}
-
-        # If the engine itself marks it invalid.
-        if result.get(
-            "is_valid"
-        ) is False:
-
-            return Response(
-                {
-                    "detail": result.get(
-                        "error",
-                        "Invalid URL.",
-                    )
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        raw_score = result.get(
-            "risk_score",
-            result.get(
-                "score",
-                0,
-            ),
-        )
-
-        risk = analyze_risk({"PHISHING_URL_ML_ENGINE": _safe_float(raw_score)})
+        risk = analyze_risk({"PHISHING_URL_ML_ENGINE": _safe_float(result.get("risk_score", 0))})
 
         threat = _create_threat(
             user=request.user,
-            threat_type=(
-                "PHISHING"
-                if risk["risk_score"] >= 40
-                else "MALICIOUS_URL"
-            ),
+            threat_type="PHISHING" if risk["risk_score"] >= 40 else "MALICIOUS_URL",
             source_type="URL",
-            input_data=url,
+            input_data=original_url,
             result=result,
             risk=risk,
         )
@@ -656,44 +548,24 @@ class URLAnalysisView(APIView):
             result=result,
         )
 
-        incident = (
-            _create_incident_if_required(
-                threat,
-                risk,
-            )
-        )
+        incident = _create_incident_if_required(threat, risk)
 
-        features = result.get(
-            "features",
-            {},
-        )
-
-        if not isinstance(
-            features,
-            dict,
-        ):
+        features = result.get("features", {})
+        if not isinstance(features, dict):
             features = {}
 
-        indicators = result.get(
-            "indicators",
-            [],
-        )
-
-        if not isinstance(
-            indicators,
-            list,
-        ):
+        indicators = result.get("indicators", [])
+        if not isinstance(indicators, list):
             indicators = []
 
-        suspicious_text = " ".join(
-            str(x)
-            for x in indicators
-        ).lower()
+        google = features.get("google_safe_browsing", {})
+        redirect = features.get("redirect_analysis", {})
+        trained = features.get("trained_model", {})
 
         scan = PhishingScan.objects.create(
             user=request.user,
             scan_type="URL",
-            input_data=url,
+            input_data=original_url,
             risk_score=threat.risk_score,
             result=threat.severity,
             explanation=threat.explanation,
@@ -702,111 +574,47 @@ class URLAnalysisView(APIView):
 
         URLAnalysis.objects.create(
             scan=scan,
-            domain=hostname[:255],
-            uses_https=(
-                parsed_url.scheme.lower()
-                == "https"
-            ),
-            url_length=len(url),
-            has_ip_address=bool(
-                features.get(
-                    "ip_address_host",
-                    False,
-                )
-            ),
-            has_suspicious_keyword=(
-                bool(indicators)
-                or "suspicious"
-                in suspicious_text
-            ),
-            has_shortener=bool(
-                features.get(
-                    "url_shortener",
-                    False,
-                )
-            ),
-            redirect_count=int(
-                features.get(
-                    "redirect_count",
-                    0,
-                )
-                or 0
-            ),
-            analysis_details={
-                "url": url,
-                "prediction": result.get(
-                    "prediction",
-                    "UNKNOWN",
-                ),
-                "confidence": _normalize_confidence(
-                    result.get(
-                        "confidence",
-                        0,
-                    )
-                ),
-                "indicators": indicators,
-                "features": features,
-                "recommendation": result.get(
-                    "recommendation",
-                    "",
-                ),
-                "engine_result": result,
-            },
+            domain=(parsed_url.hostname or "")[:255],
+            uses_https=parsed_url.scheme.lower() == "https",
+            url_length=len(original_url),
+            has_ip_address=bool(trained.get("features", {}).get("ip_address_host", False)),
+            has_suspicious_keyword=bool(indicators),
+            has_shortener=bool(redirect.get("shortener_detected", False)),
+            redirect_count=int(redirect.get("redirect_count", 0) or 0),
+            analysis_details=result,
         )
 
         AuditLog.objects.create(
             user=request.user,
             action="URL_ANALYZED",
-            ip_address=get_client_ip(
-                request
-            ),
-            user_agent=request.META.get(
-                "HTTP_USER_AGENT",
-                "",
-            ),
+            ip_address=get_client_ip(request),
+            user_agent=request.META.get("HTTP_USER_AGENT", ""),
             description=(
-                f"URL analysis completed. "
-                f"Threat ID: {threat.id}; "
-                f"score={threat.risk_score}; "
-                f"severity={threat.severity}"
+                f"URL analysis completed. Threat ID: {threat.id}; "
+                f"score={threat.risk_score}; severity={threat.severity}"
             ),
             status="SUCCESS",
         )
 
         response_data = {
-            "message": (
-                "URL analysis completed."
-            ),
-            "url": url,
+            "message": "URL analysis completed.",
+            "url": original_url,
             "risk_score": threat.risk_score,
             "severity": threat.severity,
-            "prediction": result.get(
-                "prediction",
-                "UNKNOWN",
-            ),
-            "confidence": _normalize_confidence(
-                result.get(
-                    "confidence",
-                    0,
-                )
-            ),
-            "indicators": result.get(
-                "indicators",
-                [],
-            ),
-            "features": result.get(
-                "features",
-                {},
-            ),
-            "recommendation": result.get(
-                "recommendation",
-                "",
-            ),
+            "prediction": result.get("prediction", "UNKNOWN"),
+            "confidence": _normalize_confidence(result.get("confidence", 0)),
+            "indicators": indicators,
+            "features": features,
+            "model_results": {
+                "trained_url_model": trained,
+                "url_security_engine": {
+                    "redirect_analysis": redirect,
+                    "google_safe_browsing": google,
+                },
+            },
+            "recommendation": result.get("recommendation", ""),
             "explanation": threat.explanation,
-            "recommended_actions": risk.get(
-                "recommended_actions",
-                [],
-            ),
+            "recommended_actions": risk.get("recommended_actions", []),
             "threat_id": threat.id,
             "scan_id": scan.id,
         }
@@ -818,10 +626,7 @@ class URLAnalysisView(APIView):
                 "status": incident.status,
             }
 
-        return Response(
-            response_data,
-            status=status.HTTP_201_CREATED,
-        )
+        return Response(response_data, status=status.HTTP_201_CREATED)
 
 
 class EmailAnalysisView(APIView):
