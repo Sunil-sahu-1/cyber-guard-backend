@@ -19,6 +19,7 @@ from audit_logs.models import AuditLog
 from ai_engine.trained_classifiers import analyze_phishing_email_ml, analyze_phishing_url_ml
 from ai_engine.url_security import analyze_url_security
 from ai_engine.risk_engine import analyze_risk
+from ai_engine.nlp_model import analyze_email
 
 from incidents.models import (
     Incident,
@@ -717,13 +718,144 @@ class EmailAnalysisView(APIView):
             if part
         )
 
-        result = analyze_phishing_email_ml(email_text) or {}
+        # Run both engines:
+        # 1. trained TF-IDF + Logistic Regression for phishing probability
+        # 2. rule/NLP engine for email type, spam, promotional content,
+        #    suspicious links and other security indicators.
+        ml_result = analyze_phishing_email_ml(email_text) or {}
 
         if not isinstance(
-            result,
+            ml_result,
             dict,
         ):
-            result = {}
+            ml_result = {}
+
+        rule_result = analyze_email(email_text) or {}
+
+        if not isinstance(
+            rule_result,
+            dict,
+        ):
+            rule_result = {}
+
+        result = dict(rule_result)
+
+        rule_features = result.get(
+            "features",
+            {},
+        )
+
+        if not isinstance(
+            rule_features,
+            dict,
+        ):
+            rule_features = {}
+
+        ml_features = ml_result.get(
+            "features",
+            {},
+        )
+
+        if not isinstance(
+            ml_features,
+            dict,
+        ):
+            ml_features = {}
+
+        ml_score = _safe_float(
+            ml_result.get(
+                "risk_score",
+                0,
+            )
+        )
+
+        rule_score = _safe_float(
+            result.get(
+                "risk_score",
+                0,
+            )
+        )
+
+        # Keep the strongest security signal while retaining both engine
+        # outputs for transparency.
+        combined_score = max(
+            ml_score,
+            rule_score,
+        )
+
+        result["risk_score"] = combined_score
+        result["features"] = {
+            **rule_features,
+            "trained_model": ml_features,
+            "ml_phishing_probability": round(
+                ml_score / 100.0,
+                4,
+            ),
+            "ml_prediction": ml_result.get(
+                "prediction",
+                "UNKNOWN",
+            ),
+            "ml_confidence": _normalize_confidence(
+                ml_result.get(
+                    "confidence",
+                    0,
+                )
+            ),
+        }
+        result["model_results"] = {
+            "trained_email_model": ml_result,
+            "content_and_security_engine": rule_result,
+        }
+
+        # A strong trained phishing result takes priority over content
+        # categories such as promotional/spam.
+        if ml_score >= 80:
+            result["prediction"] = "PHISHING"
+        elif ml_score >= 60 and result.get("prediction") not in {
+            "PHISHING",
+            "LIKELY_PHISHING",
+        }:
+            result["prediction"] = "LIKELY_PHISHING"
+
+        email_addresses = rule_features.get(
+            "email_addresses",
+            [],
+        )
+
+        sender_valid = bool(sender)
+        has_subject = bool(subject)
+        has_body = bool(body)
+
+        if sender_valid and (has_subject or has_body):
+            email_status = "VALID_EMAIL"
+            email_confidence = 95.0
+        elif email_addresses and (has_subject or has_body):
+            email_status = "POSSIBLE_EMAIL"
+            email_confidence = 80.0
+        else:
+            email_status = "NOT_EMAIL"
+            email_confidence = 35.0
+
+        email_validation = {
+            "is_email": email_status != "NOT_EMAIL",
+            "status": email_status,
+            "confidence": email_confidence,
+            "sender_valid": sender_valid,
+            "subject_present": has_subject,
+            "body_present": has_body,
+            "email_addresses_found": email_addresses,
+            "checks": [
+                "Sender address format",
+                "Subject/message structure",
+                "Email-address patterns in content",
+            ],
+        }
+
+        result["email_validation"] = email_validation
+        result["content_category"] = rule_result.get(
+            "content_category",
+            "LEGITIMATE",
+        )
 
         raw_score = result.get(
             "risk_score",
@@ -854,6 +986,60 @@ class EmailAnalysisView(APIView):
                         "",
                     ),
                     "engine_result": result,
+                    "email_validation": email_validation,
+                    "content_category": result.get(
+                        "content_category",
+                        "LEGITIMATE",
+                    ),
+                    "spam_analysis": {
+                        "detected": bool(
+                            features.get(
+                                "spam_detected",
+                                False,
+                            )
+                        ),
+                        "score": features.get(
+                            "spam_score",
+                            0,
+                        ),
+                        "keywords": features.get(
+                            "spam_keywords",
+                            [],
+                        ),
+                        "reasons": features.get(
+                            "spam_reasons",
+                            [],
+                        ),
+                    },
+                    "promotional_analysis": {
+                        "detected": bool(
+                            features.get(
+                                "promotional_detected",
+                                False,
+                            )
+                        ),
+                        "category": features.get(
+                            "promotional_category",
+                        ),
+                        "keywords": features.get(
+                            "promotional_keywords",
+                            [],
+                        ),
+                        "event_keywords": features.get(
+                            "event_keywords",
+                            [],
+                        ),
+                        "registration_keywords": features.get(
+                            "registration_keywords",
+                            [],
+                        ),
+                        "unsubscribe_detected": bool(
+                            features.get(
+                                "unsubscribe_detected",
+                                False,
+                            )
+                        ),
+                    },
                 },
             )
         )
@@ -914,6 +1100,64 @@ class EmailAnalysisView(APIView):
             "recommended_actions": risk.get(
                 "recommended_actions",
                 [],
+            ),
+            "email_validation": email_validation,
+            "content_category": result.get(
+                "content_category",
+                "LEGITIMATE",
+            ),
+            "spam_analysis": {
+                "detected": bool(
+                    features.get(
+                        "spam_detected",
+                        False,
+                    )
+                ),
+                "score": features.get(
+                    "spam_score",
+                    0,
+                ),
+                "keywords": features.get(
+                    "spam_keywords",
+                    [],
+                ),
+                "reasons": features.get(
+                    "spam_reasons",
+                    [],
+                ),
+            },
+            "promotional_analysis": {
+                "detected": bool(
+                    features.get(
+                        "promotional_detected",
+                        False,
+                    )
+                ),
+                "category": features.get(
+                    "promotional_category",
+                ),
+                "keywords": features.get(
+                    "promotional_keywords",
+                    [],
+                ),
+                "event_keywords": features.get(
+                    "event_keywords",
+                    [],
+                ),
+                "registration_keywords": features.get(
+                    "registration_keywords",
+                    [],
+                ),
+                "unsubscribe_detected": bool(
+                    features.get(
+                        "unsubscribe_detected",
+                        False,
+                    )
+                ),
+            },
+            "model_results": result.get(
+                "model_results",
+                {},
             ),
         }
 
