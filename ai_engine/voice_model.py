@@ -487,6 +487,211 @@ def _confidence(score: float, features: dict[str, Any]) -> float:
     )
 
 
+
+def _db_from_amplitude(value: float, floor_db: float = -120.0) -> float:
+    if value <= 1e-9:
+        return floor_db
+    return round(max(floor_db, 20.0 * np.log10(float(value))), 2)
+
+
+def _decode_stereo_audio(file_path: str) -> tuple[np.ndarray, int]:
+    """Decode the first 30 seconds while preserving up to two channels."""
+    try:
+        import imageio_ffmpeg
+    except ImportError as error:
+        raise RuntimeError("Audio decoder is not installed. Install imageio-ffmpeg.") from error
+
+    ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+    command = [
+        ffmpeg_exe,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        file_path,
+        "-map",
+        "0:a:0",
+        "-t",
+        str(MAX_DURATION_SECONDS),
+        "-vn",
+        "-ac",
+        "2",
+        "-ar",
+        str(TARGET_SAMPLE_RATE),
+        "-f",
+        "f32le",
+        "-acodec",
+        "pcm_f32le",
+        "pipe:1",
+    ]
+
+    try:
+        completed = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+            timeout=MAX_DURATION_SECONDS + 20,
+        )
+    except FileNotFoundError as error:
+        raise RuntimeError("FFmpeg audio decoder is unavailable.") from error
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError("Audio decoding timed out.") from error
+    except subprocess.CalledProcessError as error:
+        decoder_error = error.stderr.decode("utf-8", errors="replace").strip()
+        raise ValueError(
+            decoder_error or "The uploaded audio format or codec could not be decoded."
+        ) from error
+
+    samples = np.frombuffer(completed.stdout, dtype=np.float32).copy()
+    if samples.size == 0:
+        raise ValueError("No audio samples were found.")
+
+    usable = samples.size - (samples.size % 2)
+    samples = samples[:usable].reshape(-1, 2)
+    return samples, TARGET_SAMPLE_RATE
+
+
+def _technical_audio_analysis(file_path: str) -> dict[str, Any]:
+    """
+    Generate presentation-ready technical measurements.
+
+    These measurements describe the recording itself. They are not used as
+    independent proof that a voice is human or AI-generated.
+    """
+    channels, sample_rate = _decode_stereo_audio(file_path)
+    left = channels[:, 0].astype(np.float64)
+    right = channels[:, 1].astype(np.float64)
+    mono = np.mean(channels, axis=1).astype(np.float64)
+
+    peak = float(np.max(np.abs(mono)))
+    rms = float(np.sqrt(np.mean(np.square(mono))))
+    dynamic_range = max(0.0, _db_from_amplitude(peak) - _db_from_amplitude(rms))
+    crest_factor = peak / max(rms, 1e-9)
+
+    dc_offset_percent = float(np.mean(mono) * 100.0)
+    clipping_ratio = float(np.mean(np.abs(mono) >= 0.995))
+    clipping_detected = clipping_ratio >= 0.001
+
+    frame_length = 2048
+    hop = 1024
+    if len(mono) < frame_length:
+        padded = np.pad(mono, (0, frame_length - len(mono)))
+    else:
+        padded = mono
+
+    frame_count = max(1, 1 + (len(padded) - frame_length) // hop)
+    frame_rms = np.array(
+        [
+            np.sqrt(np.mean(np.square(padded[i:i + frame_length])))
+            for i in range(0, len(padded) - frame_length + 1, hop)
+        ],
+        dtype=np.float64,
+    )
+    frame_db = 20.0 * np.log10(np.maximum(frame_rms, 1e-7))
+
+    signal_frames = frame_rms[frame_rms >= np.percentile(frame_rms, 35)]
+    noise_frames = frame_rms[frame_rms <= np.percentile(frame_rms, 15)]
+    signal_level = _safe_mean(signal_frames, rms)
+    noise_level = _safe_mean(noise_frames, max(rms * 0.03, 1e-6))
+    snr_db = 20.0 * np.log10(max(signal_level, 1e-9) / max(noise_level, 1e-9))
+    snr_db = round(max(0.0, min(80.0, snr_db)), 2)
+
+    # Quality score: high SNR, healthy headroom, low clipping and low DC offset.
+    snr_score = min(100.0, max(0.0, (snr_db / 40.0) * 100.0))
+    clipping_score = max(0.0, 100.0 - min(100.0, clipping_ratio * 5000.0))
+    dc_score = max(0.0, 100.0 - min(100.0, abs(dc_offset_percent) * 500.0))
+    headroom_db = max(0.0, -_db_from_amplitude(peak))
+    headroom_score = min(100.0, (headroom_db / 6.0) * 100.0)
+    overall_quality = round(
+        0.45 * snr_score
+        + 0.25 * clipping_score
+        + 0.15 * dc_score
+        + 0.15 * headroom_score,
+        1,
+    )
+
+    # Frequency balance from the first 30 seconds using a Hann-windowed FFT.
+    window = np.hanning(len(mono))
+    spectrum = np.abs(np.fft.rfft(mono * window)) ** 2
+    frequencies = np.fft.rfftfreq(len(mono), d=1.0 / sample_rate)
+    total_power = float(np.sum(spectrum)) or 1.0
+    bands = [
+        ("sub_bass", 20.0, 60.0),
+        ("bass", 60.0, 250.0),
+        ("low_mid", 250.0, 500.0),
+        ("mid", 500.0, 2000.0),
+        ("high_mid", 2000.0, 4000.0),
+        ("presence", 4000.0, 6000.0),
+        ("brilliance", 6000.0, 20000.0),
+    ]
+    frequency_analysis: dict[str, float] = {}
+    for name, low, high in bands:
+        mask = (frequencies >= low) & (frequencies < high)
+        frequency_analysis[name] = round(
+            float(np.sum(spectrum[mask]) / total_power * 100.0),
+            2,
+        )
+
+    left_rms = float(np.sqrt(np.mean(np.square(left))))
+    right_rms = float(np.sqrt(np.mean(np.square(right))))
+    left_level_db = _db_from_amplitude(left_rms)
+    right_level_db = _db_from_amplitude(right_rms)
+
+    if np.std(left) < 1e-9 or np.std(right) < 1e-9:
+        phase_correlation = 1.0
+    else:
+        phase_correlation = float(np.corrcoef(left, right)[0, 1])
+    if not np.isfinite(phase_correlation):
+        phase_correlation = 0.0
+
+    mid = (left + right) / 2.0
+    side = (left - right) / 2.0
+    mid_rms = float(np.sqrt(np.mean(np.square(mid))))
+    side_rms = float(np.sqrt(np.mean(np.square(side))))
+    stereo_width = min(100.0, max(0.0, (side_rms / max(mid_rms, 1e-9)) * 100.0))
+
+    quality_note = (
+        "Your audio has a healthy signal-to-noise ratio and no significant clipping."
+        if snr_db >= 40 and not clipping_detected
+        else (
+            "Your signal-to-noise ratio is moderate. Some background noise may be present "
+            "but is likely acceptable."
+            if snr_db >= 25
+            else "The recording contains noticeable background noise; cleaner audio may improve verification."
+        )
+    )
+
+    return {
+        "sample_rate_hz": sample_rate,
+        "channels": 2 if np.std(left - right) > 1e-7 else 1,
+        "duration_seconds": round(len(mono) / sample_rate, 2),
+        "loudness_analysis": {
+            "peak_amplitude_db": _db_from_amplitude(peak),
+            "rms_level_db": _db_from_amplitude(rms),
+            "dynamic_range_db": round(dynamic_range, 2),
+            "crest_factor": round(crest_factor, 2),
+        },
+        "frequency_analysis": frequency_analysis,
+        "stereo_analysis": {
+            "stereo_width_percent": round(stereo_width, 2),
+            "phase_correlation": round(phase_correlation, 3),
+            "left_channel_level_db": left_level_db,
+            "right_channel_level_db": right_level_db,
+        },
+        "quality_metrics": {
+            "signal_to_noise_ratio_db": snr_db,
+            "dc_offset_percent": round(dc_offset_percent, 4),
+            "clipping_detected": clipping_detected,
+            "clipping_ratio_percent": round(clipping_ratio * 100.0, 4),
+            "overall_quality": int(round(max(0.0, min(100.0, overall_quality)))),
+            "headroom_db": round(headroom_db, 2),
+        },
+        "quality_note": quality_note,
+    }
+
+
+
 def _trained_model_features(file_path: str) -> np.ndarray:
     """Extract exactly the feature vector used by train_voice_small.py."""
     import librosa
@@ -573,8 +778,18 @@ def analyze_voice_file(
             "error": "Unsupported audio format.",
         }
 
+    technical_analysis = None
+    try:
+        technical_analysis = _technical_audio_analysis(file_path)
+    except Exception:
+        # Voice detection must remain available even if optional technical
+        # presentation metrics cannot be decoded.
+        technical_analysis = None
+
     trained_result = _trained_voice_result(file_path)
     if trained_result is not None:
+        if technical_analysis is not None:
+            trained_result["technical_analysis"] = technical_analysis
         return trained_result
 
     try:
@@ -624,6 +839,7 @@ def analyze_voice_file(
         "indicators": indicators,
         "features": features,
         "signal_components": components,
+        "technical_analysis": technical_analysis,
         "recommendation": recommendation,
         "detector_note": (
             "This baseline uses multiple acoustic signals. "
