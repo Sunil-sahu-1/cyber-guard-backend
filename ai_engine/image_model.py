@@ -35,6 +35,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import cv2
+from PIL import Image, ExifTags
+
 from ai_engine.deepfake_models import (
     get_model_ensemble,
 )
@@ -283,6 +286,177 @@ def analyze_image(
     }
 
 
+def _extract_metadata(file_path: str) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "available": False,
+        "status": "UNAVAILABLE",
+        "format": None,
+        "width": None,
+        "height": None,
+        "mode": None,
+        "has_exif": False,
+        "exif_fields": [],
+        "camera_make": None,
+        "camera_model": None,
+        "software": None,
+        "datetime_original": None,
+    }
+
+    try:
+        with Image.open(file_path) as image:
+            metadata["format"] = image.format
+            metadata["width"], metadata["height"] = image.size
+            metadata["mode"] = image.mode
+
+            exif = image.getexif()
+            if exif:
+                metadata["has_exif"] = True
+                named = {}
+                for key, value in exif.items():
+                    name = ExifTags.TAGS.get(key, str(key))
+                    named[name] = str(value)
+
+                metadata["exif_fields"] = sorted(named.keys())[:30]
+                metadata["camera_make"] = named.get("Make")
+                metadata["camera_model"] = named.get("Model")
+                metadata["software"] = named.get("Software")
+                metadata["datetime_original"] = (
+                    named.get("DateTimeOriginal")
+                    or named.get("DateTime")
+                )
+                metadata["available"] = True
+                metadata["status"] = "AVAILABLE"
+            else:
+                metadata["status"] = "NO_EXIF"
+
+    except Exception as error:
+        metadata["status"] = "READ_ERROR"
+        metadata["error"] = str(error)
+
+    return metadata
+
+
+def _analyze_visual_artifacts(file_path: str) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "available": False,
+        "artifact_score": 0.0,
+        "signals": [],
+        "metrics": {},
+    }
+
+    image = cv2.imread(str(file_path))
+    if image is None:
+        result["error"] = "Unable to decode image for visual analysis."
+        return result
+
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    height, width = gray.shape[:2]
+
+    laplacian_variance = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+    brightness_mean = float(gray.mean())
+    brightness_std = float(gray.std())
+
+    edges = cv2.Canny(gray, 100, 200)
+    edge_density = float((edges > 0).mean())
+
+    # These are forensic heuristics only. They are supporting signals,
+    # not proof that an image is synthetic or manipulated.
+    signals: list[str] = []
+    artifact_score = 0.0
+
+    if laplacian_variance < 35:
+        artifact_score += 20
+        signals.append("Image has unusually smooth/low-detail regions.")
+    elif laplacian_variance > 2500:
+        artifact_score += 10
+        signals.append("Image contains unusually strong high-frequency edges.")
+
+    if edge_density > 0.22:
+        artifact_score += 10
+        signals.append("High edge density detected.")
+
+    if brightness_std < 25:
+        artifact_score += 10
+        signals.append("Low local lighting variation detected.")
+
+    if width < 256 or height < 256:
+        signals.append("Low-resolution input can reduce detector reliability.")
+
+    result.update(
+        {
+            "available": True,
+            "artifact_score": round(min(100.0, artifact_score), 2),
+            "signals": signals,
+            "metrics": {
+                "width": width,
+                "height": height,
+                "laplacian_variance": round(laplacian_variance, 2),
+                "brightness_mean": round(brightness_mean, 2),
+                "brightness_std": round(brightness_std, 2),
+                "edge_density": round(edge_density, 4),
+            },
+            "note": (
+                "Visual artifact metrics are supporting forensic signals "
+                "and are not used as a standalone deepfake verdict."
+            ),
+        }
+    )
+    return result
+
+
+def _build_face_detection(
+    pipeline: dict[str, Any],
+) -> dict[str, Any]:
+    faces = pipeline.get("faces", [])
+    return {
+        "detected": bool(faces),
+        "face_count": len(faces),
+        "faces": [
+            {
+                "x": int(face[0]),
+                "y": int(face[1]),
+                "width": int(face[2]),
+                "height": int(face[3]),
+            }
+            for face in faces
+        ],
+        "method": "OpenCV Haar Cascade",
+        "note": (
+            "Face detection identifies visible faces; it does not by itself "
+            "determine whether a face is genuine or manipulated."
+        ),
+    }
+
+
+def _analyze_no_face_result(
+    face_detection: dict[str, Any],
+    visual_artifacts: dict[str, Any],
+    metadata: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "analysis_type": "trained_efficientnet_b0_deepfake_image",
+        "is_valid": True,
+        "prediction": "NO_FACE_DETECTED",
+        "risk_score": 0.0,
+        "severity": "SAFE",
+        "confidence": 0.50,
+        "indicators": [
+            "No detectable face was found for face-based deepfake analysis."
+        ],
+        "face_detection": face_detection,
+        "visual_artifacts": visual_artifacts,
+        "metadata": metadata,
+        "features": {
+            "face_detected": False,
+            "face_count": 0,
+        },
+        "recommendation": (
+            "No face was available for the trained face-based deepfake model. "
+            "Review visual and metadata signals separately."
+        ),
+    }
+
+
 def analyze_image_file(
     file_path: str,
     file_name: str,
@@ -297,12 +471,9 @@ def analyze_image_file(
     if not basic["is_valid"]:
         return basic
 
-    pipeline = prepare_image(
-        file_path
-    )
+    pipeline = prepare_image(file_path)
 
     if not pipeline["success"]:
-
         return {
             "is_valid": False,
             "prediction": "MEDIA_READ_ERROR",
@@ -311,59 +482,54 @@ def analyze_image_file(
             "error": pipeline["error"],
         }
 
-    if not pipeline["tensors"]:
+    face_detection = _build_face_detection(pipeline)
+    visual_artifacts = _analyze_visual_artifacts(file_path)
+    metadata = _extract_metadata(file_path)
 
-        return {
-            "is_valid": True,
-            "prediction": "NO_FACE_DETECTED",
-            "risk_score": 0.0,
-            "severity": "SAFE",
-            "confidence": 0.50,
-            "indicators": [
-                "No detectable face was found."
-            ],
-            "features": {
-                "face_detected": False,
-                "face_count": 0,
-            },
-            "recommendation": (
-                "No face was available for deepfake "
-                "face analysis."
-            ),
-        }
+    if not pipeline["tensors"]:
+        return _analyze_no_face_result(
+            face_detection,
+            visual_artifacts,
+            metadata,
+        )
 
     import torch
 
-    batch = torch.stack(
-        pipeline["tensors"]
-    )
-
+    batch = torch.stack(pipeline["tensors"])
     ensemble = get_model_ensemble()
+    model_result = ensemble.predict(batch)
 
-    model_result = ensemble.predict(
-        batch
-    )
+    score = _clamp(_model_score(model_result))
+    severity = _severity(score)
 
-    score = _clamp(
-        _model_score(
-            model_result
+    indicators = [
+        f"Trained EfficientNet-B0 fake probability: {score:.2f}/100."
+    ]
+
+    if face_detection["face_count"] > 1:
+        indicators.append(
+            f"{face_detection['face_count']} faces detected and analyzed."
         )
-    )
 
-    severity = _severity(
-        score
-    )
+    if visual_artifacts.get("signals"):
+        indicators.extend(
+            f"Visual heuristic: {item}"
+            for item in visual_artifacts["signals"]
+        )
 
-    indicators = []
+    if metadata.get("status") == "NO_EXIF":
+        indicators.append(
+            "No EXIF metadata was present in the uploaded image."
+        )
 
     if score >= 60:
         indicators.append(
-            "The trained EfficientNet-B0 deepfake model detected elevated fake-image probability."
+            "The trained EfficientNet-B0 model detected elevated fake-image probability."
         )
-
-    if score >= 80:
+    elif score >= 40:
         indicators.append(
-            "The trained deepfake model strongly indicates possible manipulation."
+            "The trained EfficientNet-B0 model produced a suspicious/intermediate score; "
+            "this is not a definitive deepfake verdict."
         )
 
     return {
@@ -374,28 +540,19 @@ def analyze_image_file(
         "prediction": _prediction(score),
         "confidence": _confidence(score),
         "indicators": indicators,
+        "face_detection": face_detection,
+        "visual_artifacts": visual_artifacts,
+        "metadata": metadata,
         "features": {
             "face_detected": True,
-            "face_count": pipeline[
-                "face_count"
-            ],
-            "models_used": model_result[
-                "models_used"
-            ],
-            "fine_tuned_models": model_result[
-                "fine_tuned_models"
-            ],
-            "model_predictions": model_result[
-                "model_predictions"
-            ],
+            "face_count": pipeline["face_count"],
+            "models_used": model_result["models_used"],
+            "fine_tuned_models": model_result["fine_tuned_models"],
+            "model_predictions": model_result["model_predictions"],
             "ensemble_score": score,
-            "device": model_result[
-                "device"
-            ],
+            "device": model_result["device"],
         },
-        "recommendation": _recommendation(
-            severity
-        ),
+        "recommendation": _recommendation(severity),
     }
 
 
