@@ -1,6 +1,7 @@
 from django.urls import path
 
 from rest_framework_simplejwt.views import TokenRefreshView
+from rest_framework.throttling import ScopedRateThrottle
 
 from .views import (
     RegisterView,
@@ -28,7 +29,11 @@ urlpatterns = [
 
     path(
         "token/refresh/",
-        TokenRefreshView.as_view(),
+        type(
+            "SecureTokenRefreshView",
+            (TokenRefreshView,),
+            {"throttle_classes": [ScopedRateThrottle], "throttle_scope": "token_refresh"},
+        ).as_view(),
         name="token_refresh",
     ),
 
