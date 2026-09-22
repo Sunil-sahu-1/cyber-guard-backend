@@ -68,7 +68,7 @@ def analyze_url_security(url: str) -> dict[str, Any]:
     if original_host and final_host and original_host != final_host:
         redirect_score += 20.0
         redirect_indicators.append(
-            f"Final destination host differs from original host: {final_host}."
+            f"Final destination URL: {final_url}"
         )
 
     matches = []
