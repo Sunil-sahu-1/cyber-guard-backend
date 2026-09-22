@@ -234,7 +234,7 @@ def train_phishing_url() -> None:
     ).astype(int)
 
     work = pd.DataFrame({"url": df[url_col].fillna("").astype(str), "label": y})
-    max_samples = 20_000
+    max_samples = 50_000
     parts = []
     per_class = max_samples // 2
     for label in (0, 1):
