@@ -367,7 +367,7 @@ def analyze_image_file(
         )
 
     return {
-        "analysis_type": "advanced_deepfake_image",
+        "analysis_type": "trained_efficientnet_b0_deepfake_image",
         "is_valid": True,
         "risk_score": score,
         "severity": severity,
