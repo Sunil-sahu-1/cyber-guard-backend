@@ -68,8 +68,7 @@ class Migration(migrations.Migration):
                     "cookie_metadata",
                     models.TextField(
                         blank=True,
-                        default=list,
-                        description="AES-256-GCM encrypted JSON",
+                        default=list
                     ),
                 ),
                 (
