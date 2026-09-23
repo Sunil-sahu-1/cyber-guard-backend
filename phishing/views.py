@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
 from typing import Any
 from urllib.parse import urlparse
 
@@ -733,6 +735,47 @@ def _extract_email_fields_from_ocr(
     }
 
 
+def _configure_tesseract() -> str | None:
+    """Find the Tesseract executable automatically on Windows/Linux."""
+    if pytesseract is None:
+        return None
+
+    configured = os.getenv("TESSERACT_CMD", "").strip()
+    candidates = []
+
+    if configured:
+        candidates.append(configured)
+
+    path_executable = shutil.which("tesseract")
+    if path_executable:
+        candidates.append(path_executable)
+
+    # Common Windows installations. This avoids requiring users to manually
+    # add Tesseract to PATH when it is already installed.
+    candidates.extend(
+        [
+            r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+            r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+            os.path.expandvars(r"%LOCALAPPDATA%\Tesseract-OCR\tesseract.exe"),
+        ]
+    )
+
+    # Common Linux package locations.
+    candidates.extend(
+        [
+            "/usr/bin/tesseract",
+            "/usr/local/bin/tesseract",
+        ]
+    )
+
+    for candidate in candidates:
+        if candidate and os.path.isfile(candidate):
+            pytesseract.pytesseract.tesseract_cmd = candidate
+            return candidate
+
+    return None
+
+
 class EmailScreenshotOCRView(APIView):
 
     permission_classes = [
@@ -747,9 +790,31 @@ class EmailScreenshotOCRView(APIView):
             return Response(
                 {
                     "detail": (
-                        "OCR is not installed. Install the pytesseract "
-                        "Python package and the Tesseract OCR engine."
+                        "Python OCR support is not installed. "
+                        "Run: pip install pytesseract"
                     )
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        tesseract_path = _configure_tesseract()
+
+        if not tesseract_path:
+            return Response(
+                {
+                    "detail": (
+                        "Tesseract OCR engine is not installed or could not "
+                        "be found. On Windows run: "
+                        "winget install --id UB-Mannheim.TesseractOCR "
+                        "-e --accept-source-agreements --accept-package-agreements. "
+                        "Then restart the Django server. You can also set "
+                        "TESSERACT_CMD to the full tesseract.exe path."
+                    ),
+                    "ocr_engine": {
+                        "installed": False,
+                        "python_package": True,
+                        "tesseract_path": None,
+                    },
                 },
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
