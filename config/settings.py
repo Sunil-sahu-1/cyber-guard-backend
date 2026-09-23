@@ -356,6 +356,8 @@ REST_FRAMEWORK = {
         "password_reset": "5/hour",
         "password_reset_confirm": "10/hour",
         "token_refresh": "30/minute",
+        "browser_privacy_pair": "5/hour",
+        "browser_privacy_connect": "10/minute",
     },
 }
 
@@ -417,6 +419,12 @@ else:
         "CORS_ALLOWED_ORIGINS",
         [],
     )
+
+    # The companion browser extension uses its own chrome-extension://
+    # origin. Authentication still requires a short-lived scanner token.
+    CORS_ALLOWED_ORIGIN_REGEXES = [
+        r"^chrome-extension://[a-p]{32}$",
+    ]
 
 
 # ============================================================
