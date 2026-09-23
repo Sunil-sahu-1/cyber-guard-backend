@@ -136,3 +136,129 @@ class APIAccessSecurityTests(APITestCase):
             "too long",
             str(payload.get("detail", "")).lower(),
         )
+
+
+class BrowserPrivacySecurityTests(APITestCase):
+    def setUp(self):
+        import base64
+        import os
+
+        User = get_user_model()
+        self.user = User.objects.create_user(
+            username="browser_privacy_user",
+            user_id="browser_privacy_user",
+            email="browser-privacy@example.com",
+            phone_number="+917777777777",
+            password="Strong-Test-Password-789!",
+            first_name="Browser",
+            last_name="Privacy",
+        )
+        os.environ.setdefault(
+            "DATA_ENCRYPTION_KEY",
+            base64.urlsafe_b64encode(bytes(range(32))).decode("ascii"),
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def test_pair_connect_scan_and_history_flow(self):
+        pair_response = self.client.post(
+            "/api/browser-privacy/pair/",
+            {},
+            format="json",
+        )
+        self.assertEqual(pair_response.status_code, 201)
+
+        code = pair_response.data["pairing_code"]
+
+        self.client.force_authenticate(user=None)
+
+        connect_response = self.client.post(
+            "/api/browser-privacy/connect/",
+            {"pairing_code": code},
+            format="json",
+        )
+        self.assertEqual(connect_response.status_code, 200)
+
+        scan_token = connect_response.data["scan_token"]
+
+        scan_response = self.client.post(
+            "/api/browser-privacy/scans/",
+            {
+                "browser": "Chrome/Chromium",
+                "browser_version": "test",
+                "platform": "Windows",
+                "cookies": [
+                    {
+                        "name": "sessionid",
+                        "domain": "example.com",
+                        "path": "/",
+                        "secure": True,
+                        "httpOnly": True,
+                        "sameSite": "Lax",
+                        "value": "THIS_MUST_NEVER_BE_STORED",
+                    }
+                ],
+                "extensions": [
+                    {
+                        "id": "a" * 32,
+                        "name": "Test Extension",
+                        "version": "1.0",
+                        "enabled": True,
+                        "permissions": ["cookies", "storage"],
+                        "hostPermissions": ["<all_urls>"],
+                    }
+                ],
+            },
+            format="json",
+            HTTP_AUTHORIZATION=f"Bearer {scan_token}",
+        )
+        self.assertEqual(scan_response.status_code, 201)
+        self.assertEqual(scan_response.data["summary"]["cookie_values_received"], False)
+
+        self.client.force_authenticate(user=self.user)
+
+        history_response = self.client.get("/api/browser-privacy/scans/history/")
+        self.assertEqual(history_response.status_code, 200)
+        self.assertEqual(history_response.data["count"], 1)
+
+        stored_cookie = history_response.data["results"][0]["cookies"][0]
+        self.assertNotIn("value", stored_cookie)
+        self.assertEqual(stored_cookie["name"], "sessionid")
+        self.assertEqual(
+            history_response.data["results"][0]["high_impact_extension_count"],
+            1,
+        )
+
+    def test_pairing_code_is_one_time_use(self):
+        pair_response = self.client.post(
+            "/api/browser-privacy/pair/",
+            {},
+            format="json",
+        )
+        self.assertEqual(pair_response.status_code, 201)
+
+        code = pair_response.data["pairing_code"]
+
+        self.client.force_authenticate(user=None)
+
+        first = self.client.post(
+            "/api/browser-privacy/connect/",
+            {"pairing_code": code},
+            format="json",
+        )
+        second = self.client.post(
+            "/api/browser-privacy/connect/",
+            {"pairing_code": code},
+            format="json",
+        )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 400)
+
+    def test_browser_scan_token_cannot_access_user_history(self):
+        self.client.force_authenticate(user=None)
+
+        response = self.client.get(
+            "/api/browser-privacy/scans/history/",
+        )
+
+        self.assertEqual(response.status_code, 401)
