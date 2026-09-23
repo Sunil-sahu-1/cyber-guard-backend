@@ -51,6 +51,11 @@ urlpatterns = [
         "api/audit/",
         include("audit_logs.urls"),
     ),
+
+    path(
+        "api/browser-privacy/",
+        include("security.urls"),
+    ),
 ]
 
 
