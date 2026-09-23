@@ -311,6 +311,83 @@ class BrowserPrivacyScanCreateView(APIView):
         )
 
 
+class BrowserPrivacyDashboardScanCreateView(APIView):
+    """Store a scan collected by the companion extension for the logged-in dashboard user."""
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "browser_privacy_connect"
+
+    def post(self, request):
+        if not isinstance(request.data, dict):
+            return Response(
+                {"detail": "JSON object expected."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        cookies = _clean_cookie_metadata(request.data.get("cookies"))
+        extensions = _clean_extension_metadata(request.data.get("extensions"))
+
+        sensitive_cookie_count = sum(
+            1
+            for cookie in cookies
+            if any(
+                marker in cookie["name"].lower()
+                for marker in (
+                    "session", "sess", "auth", "token", "jwt", "sid",
+                    "csrf", "xsrf", "password", "passwd", "secret",
+                    "access", "refresh",
+                )
+            )
+        )
+        high_impact_extension_count = sum(
+            1
+            for extension in extensions
+            if extension["high_impact_permissions"]
+            or any(
+                origin in {"<all_urls>", "*://*/*", "http://*/*", "https://*/*"}
+                for origin in extension["host_permissions"]
+            )
+        )
+
+        summary = {
+            "cookie_count": len(cookies),
+            "sensitive_cookie_count": sensitive_cookie_count,
+            "cookie_domains": len({c["domain"] for c in cookies if c["domain"]}),
+            "extension_count": len(extensions),
+            "enabled_extension_count": sum(1 for e in extensions if e["enabled"]),
+            "high_impact_extension_count": high_impact_extension_count,
+            "metadata_only": True,
+            "cookie_values_received": False,
+            "declared_permissions_are_not_runtime_proof": True,
+            "collection_mode": "automatic_companion_extension",
+        }
+
+        scan = BrowserPrivacyScan.objects.create(
+            user=request.user,
+            browser=_clean_text(request.data.get("browser"), 100),
+            browser_version=_clean_text(request.data.get("browser_version"), 100),
+            platform=_clean_text(request.data.get("platform"), 150),
+            cookie_count=len(cookies),
+            sensitive_cookie_count=sensitive_cookie_count,
+            extension_count=len(extensions),
+            high_impact_extension_count=high_impact_extension_count,
+            cookie_metadata=cookies,
+            extension_metadata=extensions,
+            summary=summary,
+        )
+
+        return Response(
+            {
+                "message": "Automatic browser privacy scan stored.",
+                "scan_id": scan.id,
+                "scanned_at": scan.scanned_at,
+                "summary": summary,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
 class BrowserPrivacyScanListView(APIView):
     permission_classes = [IsAuthenticated]
 
