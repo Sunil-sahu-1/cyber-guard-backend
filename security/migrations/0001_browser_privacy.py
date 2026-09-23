@@ -68,7 +68,7 @@ class Migration(migrations.Migration):
                     "cookie_metadata",
                     models.TextField(
                         blank=True,
-                        default=list
+                        default=list,
                     ),
                 ),
                 (
@@ -76,7 +76,6 @@ class Migration(migrations.Migration):
                     models.TextField(
                         blank=True,
                         default=list,
-                        description="AES-256-GCM encrypted JSON",
                     ),
                 ),
                 (
@@ -84,7 +83,6 @@ class Migration(migrations.Migration):
                     models.TextField(
                         blank=True,
                         default=dict,
-                        description="AES-256-GCM encrypted JSON",
                     ),
                 ),
                 ("scanned_at", models.DateTimeField(auto_now_add=True)),
