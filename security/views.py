@@ -161,6 +161,23 @@ class BrowserPrivacyPairView(APIView):
         )
 
 
+class BrowserPrivacyAutoTokenView(APIView):
+    """Issue a short-lived scanner token to the already authenticated dashboard."""
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "browser_privacy_pair"
+
+    def post(self, request):
+        return Response(
+            {
+                "message": "Browser scanner auto-connection token created.",
+                "scan_token": _make_scan_token(request.user.id),
+                "expires_in_seconds": SCAN_TOKEN_TTL_MINUTES * 60,
+            }
+        )
+
+
 class BrowserPrivacyConnectView(APIView):
     permission_classes = [AllowAny]
     throttle_classes = [ScopedRateThrottle]
